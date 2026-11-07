@@ -1,0 +1,144 @@
+// Zod schemas for everything that crosses a trust boundary.
+
+import { z } from "zod";
+import { isIsoDate } from "./domain/dates";
+import { ALLERGENS, CATEGORIES, DIETARY_FILTERS } from "./domain/types";
+
+const id = z.string().trim().min(1).max(60).regex(/^[a-z0-9-]+$/);
+const isoDate = z.string().refine(isIsoDate, "Invalid date");
+const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use HH:MM");
+const cents = z.number().int().min(0).max(1_000_000);
+
+export const cakeConfigSchema = z.object({
+  occasion: id,
+  size: id,
+  flavour: id,
+  finish: id,
+  colour: id,
+  decorations: z.array(id).max(20),
+  extras: z.array(id).max(20),
+  topperText: z.string().max(30).default(""),
+});
+
+const dietaryKeys = Object.keys(DIETARY_FILTERS) as [keyof typeof DIETARY_FILTERS, ...(keyof typeof DIETARY_FILTERS)[]];
+
+export const orderRequestSchema = z.object({
+  config: cakeConfigSchema,
+  dietary: z.array(z.enum(dietaryKeys)).max(4).default([]),
+  pickupDate: isoDate,
+  pickupSlot: hhmm,
+  customerName: z.string().trim().min(2, "Please enter your name").max(80),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email").max(120),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9 +()-]{8,20}$/, "Please enter a valid phone number"),
+  allergyNotes: z.string().trim().max(500).default(""),
+  notes: z.string().trim().max(1000).default(""),
+  marketingOptIn: z.boolean().default(false),
+  acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+});
+export type OrderRequest = z.infer<typeof orderRequestSchema>;
+
+export const settingsSchema = z
+  .object({
+    minNoticeDays: z.number().int().min(0).max(60),
+    rushEnabled: z.boolean(),
+    rushFeeCents: cents,
+    rushMinDays: z.number().int().min(1).max(30),
+    dailyCap: z.number().int().min(0).max(50),
+    weeklyCap: z.number().int().min(0).max(200),
+    pickupStart: hhmm,
+    pickupEnd: hhmm,
+    slotMinutes: z.union([z.literal(15), z.literal(30), z.literal(60)]),
+    slotCap: z.number().int().min(1).max(20),
+    depositPercent: z.number().int().min(10).max(100),
+    balanceDueDays: z.number().int().min(0).max(30),
+    changeCutoffDays: z.number().int().min(0).max(60),
+    closedWeekdays: z.array(z.number().int().min(0).max(6)).max(7),
+    bookingHorizonDays: z.number().int().min(7).max(730),
+    cancellationPolicy: z.string().max(2000),
+  })
+  .refine((s) => s.pickupStart < s.pickupEnd, { message: "Pickup start must be before pickup end", path: ["pickupEnd"] });
+
+export const catalogueItemPatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  description: z.string().trim().max(200).optional(),
+  priceCents: cents.optional(),
+  priceMode: z.enum(["flat", "per_tier"]).optional(),
+  tiers: z.number().int().min(1).max(6).optional(),
+  hex: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(),
+  allergens: z.array(z.enum(ALLERGENS)).optional(),
+  visible: z.boolean().optional(),
+  sort: z.number().int().min(0).max(100000).optional(),
+});
+
+export const newCatalogueItemSchema = z.object({
+  category: z.enum(CATEGORIES),
+  name: z.string().trim().min(1).max(80),
+  priceCents: cents,
+});
+
+export const peakDateSchema = z.object({
+  date: isoDate,
+  label: z.string().trim().min(1).max(60),
+  surchargeCents: cents,
+});
+
+export const dayOffSchema = z.object({
+  date: isoDate,
+  note: z.string().trim().max(100).default(""),
+});
+
+export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic"] as const;
+export const VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"] as const;
+export const MAX_INSPIRATION_BYTES = 8 * 1024 * 1024;
+export const MAX_UPDATE_BYTES = 50 * 1024 * 1024;
+
+export type UploadCheck = { ok: true; ext: string } | { ok: false; reason: string };
+
+const EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "video/mp4": "mp4",
+  "video/quicktime": "mov",
+  "video/webm": "webm",
+};
+
+/** Checks the declared type, the size and the file's magic bytes. */
+export function checkUpload(
+  bytes: Uint8Array,
+  contentType: string,
+  allowed: readonly string[],
+  maxBytes: number,
+): UploadCheck {
+  if (!allowed.includes(contentType)) return { ok: false, reason: "That file type is not supported." };
+  if (bytes.byteLength === 0) return { ok: false, reason: "The file is empty." };
+  if (bytes.byteLength > maxBytes) {
+    return { ok: false, reason: `Files must be under ${Math.round(maxBytes / 1024 / 1024)} MB.` };
+  }
+  if (!magicMatches(bytes, contentType)) return { ok: false, reason: "That file does not look like a valid image or video." };
+  return { ok: true, ext: EXT[contentType] };
+}
+
+function magicMatches(b: Uint8Array, type: string): boolean {
+  const ascii = (start: number, len: number) => String.fromCharCode(...b.slice(start, start + len));
+  switch (type) {
+    case "image/jpeg":
+      return b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+    case "image/png":
+      return b[0] === 0x89 && ascii(1, 3) === "PNG";
+    case "image/webp":
+      return ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP";
+    case "image/heic":
+    case "video/mp4":
+    case "video/quicktime":
+      return ascii(4, 4) === "ftyp";
+    case "video/webm":
+      return b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3;
+    default:
+      return false;
+  }
+}
