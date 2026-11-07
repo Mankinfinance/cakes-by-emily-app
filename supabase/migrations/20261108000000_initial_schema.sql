@@ -4,7 +4,6 @@
 -- Security blocks everything else. Emily's admin login gets read access via
 -- the is_admin() policies (with two-factor, aal2) for use in the Supabase dashboard.
 
-create extension if not exists pgcrypto;
 
 -- Admins ----------------------------------------------------------------
 create table public.admins (

@@ -179,6 +179,16 @@ export const memoryRepository: Repository = {
     store().media.set(path, { bytes: new Uint8Array(file.bytes), contentType: file.contentType });
   },
   async mediaUrl(path) {
-    return store().media.has(path) ? `/api/test-media/${encodeURIComponent(path)}` : null;
+    return store().media.has(path) ? `/api/test-media?path=${encodeURIComponent(path)}` : null;
+  },
+  async createUploadTarget(path, contentType) {
+    return { kind: "local", url: `/api/test-upload?path=${encodeURIComponent(path)}&type=${encodeURIComponent(contentType)}` };
+  },
+  async readMediaHead(path, length) {
+    const f = store().media.get(path);
+    return f ? { bytes: f.bytes.slice(0, length), contentType: f.contentType } : null;
+  },
+  async deleteMedia(path) {
+    store().media.delete(path);
   },
 };
