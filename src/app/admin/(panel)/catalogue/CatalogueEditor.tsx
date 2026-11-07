@@ -26,18 +26,20 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
   const [name, setName] = useState(item.name);
   const [price, setPrice] = useState((item.priceCents / 100).toString());
   const [allergens, setAllergens] = useState<Allergen[]>(item.allergens);
+  const [visible, setVisible] = useState(item.visible);
   const dirty = name !== item.name || toCents(price) !== item.priceCents || allergens.join() !== item.allergens.join();
 
   function save(patch: Record<string, unknown>) {
     start(async () => {
       const r = await updateItemAction(item.id, patch);
       onError(r.ok ? null : r.error);
+      if (!r.ok && typeof patch.visible === "boolean") setVisible(!patch.visible);
       router.refresh();
     });
   }
 
   return (
-    <li className={`grid gap-3 border-b border-line py-3 last:border-0 md:grid-cols-[1fr_120px_auto] md:items-start ${item.visible ? "" : "opacity-60"}`} data-testid={`item-${item.id}`}>
+    <li className={`grid gap-3 border-b border-line py-3 last:border-0 md:grid-cols-[1fr_120px_auto] md:items-start ${visible ? "" : "opacity-60"}`} data-testid={`item-${item.id}`}>
       <div className="min-w-0">
         <input className="field !py-2" value={name} onChange={(e) => setName(e.target.value)} aria-label={`Name for ${item.name}`} />
         <div className="mt-2 flex flex-wrap gap-1">
@@ -62,14 +64,17 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={item.visible}
+            checked={visible}
             disabled={pending}
-            onChange={(e) => save({ visible: e.target.checked })}
+            onChange={(e) => {
+              setVisible(e.target.checked);
+              save({ visible: e.target.checked });
+            }}
             data-testid={`visible-${item.id}`}
           />
           Show to customers
         </label>
-        {!item.visible && <span className="rounded-full bg-blush px-2 py-0.5 text-xs font-semibold">Hidden</span>}
+        {!visible && <span className="rounded-full bg-blush px-2 py-0.5 text-xs font-semibold">Hidden</span>}
         <button
           type="button"
           className="btn btn-primary !px-4 !py-1.5 text-sm"
@@ -106,7 +111,7 @@ export function CatalogueEditor({ items }: { items: CatalogueItem[] }) {
             </h2>
             <ul className="mt-2">
               {list.map((i) => (
-                <Row key={`${i.id}-${i.priceCents}-${i.name}-${i.allergens.join()}`} item={i} onError={setError} />
+                <Row key={`${i.id}-${i.priceCents}-${i.name}-${i.allergens.join()}-${i.visible}`} item={i} onError={setError} />
               ))}
             </ul>
           </section>
