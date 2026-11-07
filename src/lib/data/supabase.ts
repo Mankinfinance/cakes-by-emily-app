@@ -319,6 +319,22 @@ export const supabaseRepository: Repository = {
     if (error) return null;
     return data.signedUrl;
   },
+  async createUploadTarget(path) {
+    const { data, error } = await db().storage.from(BUCKET).createSignedUploadUrl(path);
+    if (error) throw new Error(`Could not start upload: ${error.message}`);
+    return { kind: "supabase", bucket: BUCKET, path: data.path, token: data.token };
+  },
+  async readMediaHead(path, length) {
+    const { data, error } = await db().storage.from(BUCKET).createSignedUrl(path, 60);
+    if (error || !data) return null;
+    const res = await fetch(data.signedUrl, { headers: { Range: `bytes=0-${length - 1}` } });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer()).slice(0, length);
+    return { bytes, contentType: res.headers.get("content-type") ?? "" };
+  },
+  async deleteMedia(path) {
+    await db().storage.from(BUCKET).remove([path]);
+  },
 };
 
 function toPayment(r: Row): Payment {

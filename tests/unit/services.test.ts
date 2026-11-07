@@ -12,6 +12,8 @@ import {
   runReminders,
   slotAvailability,
   startBalancePayment,
+  startVideoUpload,
+  finishVideoUpload,
 } from "@/lib/services/orders";
 import { fakeGateway } from "@/lib/services/payments";
 import { hashToken, looksLikeToken, newReference, orderToken } from "@/lib/services/tokens";
@@ -216,6 +218,26 @@ describe("Emily's actions", () => {
     expect(u.caption).toBe("Layers are baked!");
     await expect(postUpdate(deps, order.id, "", null)).rejects.toThrow(/Add a photo/);
     await expect(postUpdate(deps, order.id, "x", { bytes: PNG, contentType: "application/pdf" })).rejects.toThrow(/not supported/);
+  });
+
+  it("uploads videos directly and checks them before posting", async () => {
+    const { order } = await createAndPay();
+    await expect(startVideoUpload(deps, order.id, "video/avi", 100)).rejects.toThrow(/MP4/);
+    await expect(startVideoUpload(deps, order.id, "video/mp4", 60 * 1024 * 1024)).rejects.toThrow(/50 MB/);
+    const { path, target } = await startVideoUpload(deps, order.id, "video/mp4", 1000);
+    expect(target.kind).toBe("local");
+    await expect(finishVideoUpload(deps, order.id, path, "Decorating!")).rejects.toThrow(/did not finish/);
+    await expect(finishVideoUpload(deps, order.id, "orders/other/update-x.mp4", "")).rejects.toThrow(/does not belong/);
+    // A fake "video" that is really text is rejected and removed.
+    await repo.uploadMedia(path, { bytes: new TextEncoder().encode("not a video at all"), contentType: "video/mp4" });
+    await expect(finishVideoUpload(deps, order.id, path, "")).rejects.toThrow(/valid video/);
+    expect(await repo.readMediaHead(path, 4)).toBeNull();
+    // A real MP4 header passes.
+    const mp4 = new Uint8Array([0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]);
+    await repo.uploadMedia(path, { bytes: mp4, contentType: "video/mp4" });
+    await finishVideoUpload(deps, order.id, path, "Decorating!");
+    const [u] = await repo.listUpdates(order.id);
+    expect(u).toMatchObject({ kind: "video", caption: "Decorating!", mediaPath: path });
   });
 
   it("cancelling frees the slot", async () => {

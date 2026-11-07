@@ -11,7 +11,7 @@ import type { Order, Stage } from "../domain/types";
 import { sanitizeConfig, visibleItems } from "../domain/visibility";
 import type { Repository } from "../data/repository";
 import type { OrderRequest } from "../validation";
-import { checkUpload, IMAGE_TYPES, MAX_INSPIRATION_BYTES, MAX_UPDATE_BYTES, VIDEO_TYPES } from "../validation";
+import { checkUpload, IMAGE_TYPES, magicMatches, MAX_PHOTO_BYTES, MAX_VIDEO_BYTES, VIDEO_TYPES } from "../validation";
 import {
   balanceReceiptEmail,
   balanceReminderEmail,
@@ -116,7 +116,7 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
   const id = randomUUID();
   let inspirationPath: string | null = null;
   if (inspiration) {
-    const check = checkUpload(inspiration.bytes, inspiration.contentType, IMAGE_TYPES, MAX_INSPIRATION_BYTES);
+    const check = checkUpload(inspiration.bytes, inspiration.contentType, IMAGE_TYPES, MAX_PHOTO_BYTES);
     if (!check.ok) throw new OrderError(check.reason);
     inspirationPath = `orders/${id}/inspiration-${randomUUID()}.${check.ext}`;
     await repo.uploadMedia(inspirationPath, inspiration);
@@ -223,33 +223,56 @@ export async function cancelOrder(deps: Omit<Deps, "payments">, orderId: string)
   await deps.repo.addUpdate({ orderId: order.id, kind: "stage", caption: "This order was cancelled.", mediaPath: null });
 }
 
+/** A photo (sent through the website) or a text-only note. */
 export async function postUpdate(
   deps: Omit<Deps, "payments">,
   orderId: string,
   caption: string,
-  file: Upload | null,
+  photo: Upload | null,
 ): Promise<void> {
   const order = await deps.repo.getOrderById(orderId);
   if (!order) throw new OrderError("Order not found.", 404);
   const text = caption.trim().slice(0, 300);
   let mediaPath: string | null = null;
-  let kind: "photo" | "video" | "note" = "note";
-  if (file) {
-    const isVideo = file.contentType.startsWith("video/");
-    const check = checkUpload(
-      file.bytes,
-      file.contentType,
-      isVideo ? VIDEO_TYPES : IMAGE_TYPES,
-      isVideo ? MAX_UPDATE_BYTES : MAX_INSPIRATION_BYTES * 2,
-    );
+  if (photo) {
+    const check = checkUpload(photo.bytes, photo.contentType, IMAGE_TYPES, MAX_PHOTO_BYTES);
     if (!check.ok) throw new OrderError(check.reason);
     mediaPath = `orders/${order.id}/update-${randomUUID()}.${check.ext}`;
-    await deps.repo.uploadMedia(mediaPath, file);
-    kind = isVideo ? "video" : "photo";
+    await deps.repo.uploadMedia(mediaPath, photo);
   } else if (!text) {
     throw new OrderError("Add a photo, a video or a caption.");
   }
-  await deps.repo.addUpdate({ orderId: order.id, kind, caption: text, mediaPath });
+  await deps.repo.addUpdate({ orderId: order.id, kind: photo ? "photo" : "note", caption: text, mediaPath });
+  await sendSafely(deps.mailer, photoUpdateEmail(order, text, orderLink(deps.baseUrl, order.id)));
+}
+
+const VIDEO_EXT: Record<string, string> = { "video/mp4": "mp4", "video/quicktime": "mov", "video/webm": "webm" };
+
+/** Step 1 of a video update: a signed link so the browser uploads straight to storage. */
+export async function startVideoUpload(deps: Pick<Deps, "repo">, orderId: string, contentType: string, size: number) {
+  const order = await deps.repo.getOrderById(orderId);
+  if (!order) throw new OrderError("Order not found.", 404);
+  if (!(VIDEO_TYPES as readonly string[]).includes(contentType)) throw new OrderError("Please choose an MP4, MOV or WebM video.");
+  if (size <= 0 || size > MAX_VIDEO_BYTES) throw new OrderError("Videos must be under 50 MB.");
+  const path = `orders/${order.id}/update-${randomUUID()}.${VIDEO_EXT[contentType]}`;
+  return { path, target: await deps.repo.createUploadTarget(path, contentType) };
+}
+
+/** Step 2: check what was uploaded, then post it to the customer's tracker. */
+export async function finishVideoUpload(deps: Omit<Deps, "payments">, orderId: string, path: string, caption: string) {
+  const order = await deps.repo.getOrderById(orderId);
+  if (!order) throw new OrderError("Order not found.", 404);
+  if (!new RegExp(`^orders/${order.id}/update-[0-9a-f-]{36}\\.(mp4|mov|webm)$`).test(path)) {
+    throw new OrderError("That upload does not belong to this order.");
+  }
+  const head = await deps.repo.readMediaHead(path, 32);
+  if (!head) throw new OrderError("The video did not finish uploading. Please try again.");
+  if (!magicMatches(head.bytes, head.contentType)) {
+    await deps.repo.deleteMedia(path);
+    throw new OrderError("That file does not look like a valid video.");
+  }
+  const text = caption.trim().slice(0, 300);
+  await deps.repo.addUpdate({ orderId: order.id, kind: "video", caption: text, mediaPath: path });
   await sendSafely(deps.mailer, photoUpdateEmail(order, text, orderLink(deps.baseUrl, order.id)));
 }
 

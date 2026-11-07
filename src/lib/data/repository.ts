@@ -22,6 +22,10 @@ export interface MediaFile {
   contentType: string;
 }
 
+export type UploadTarget =
+  | { kind: "supabase"; bucket: string; path: string; token: string }
+  | { kind: "local"; url: string };
+
 export interface Repository {
   // Catalogue and settings
   listCatalogue(): Promise<CatalogueItem[]>;
@@ -61,4 +65,9 @@ export interface Repository {
   uploadMedia(path: string, file: MediaFile): Promise<void>;
   /** A short-lived URL the browser can load, or null if missing. */
   mediaUrl(path: string): Promise<string | null>;
+  /** Where the browser should upload a large file (videos) directly. */
+  createUploadTarget(path: string, contentType: string): Promise<UploadTarget>;
+  /** The first bytes of a stored file, to check it really is what it claims. */
+  readMediaHead(path: string, length: number): Promise<MediaFile | null>;
+  deleteMedia(path: string): Promise<void>;
 }

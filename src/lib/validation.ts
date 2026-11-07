@@ -92,8 +92,13 @@ export const dayOffSchema = z.object({
 
 export const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic"] as const;
 export const VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm"] as const;
-export const MAX_INSPIRATION_BYTES = 8 * 1024 * 1024;
-export const MAX_UPDATE_BYTES = 50 * 1024 * 1024;
+/**
+ * Photos are resized in the browser before upload and sent through the
+ * website, so they stay under Vercel's 4.5 MB request limit. Videos go
+ * straight to Supabase Storage with a signed upload link.
+ */
+export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
 export type UploadCheck = { ok: true; ext: string } | { ok: false; reason: string };
 
@@ -123,7 +128,7 @@ export function checkUpload(
   return { ok: true, ext: EXT[contentType] };
 }
 
-function magicMatches(b: Uint8Array, type: string): boolean {
+export function magicMatches(b: Uint8Array, type: string): boolean {
   const ascii = (start: number, len: number) => String.fromCharCode(...b.slice(start, start + len));
   switch (type) {
     case "image/jpeg":
