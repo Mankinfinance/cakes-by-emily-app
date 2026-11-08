@@ -18,6 +18,11 @@ export function orderToken(orderId: string): string {
   return createHmac("sha256", secret()).update(`order:${orderId}`).digest("base64url");
 }
 
+/** Private links for other things customers own (phase 3). */
+export function linkToken(purpose: "review" | "corporate" | "booking", id: string): string {
+  return createHmac("sha256", secret()).update(`${purpose}:${id}`).digest("base64url");
+}
+
 /** Private link for a seasonal box order. */
 export function boxToken(boxOrderId: string): string {
   return createHmac("sha256", secret()).update(`box:${boxOrderId}`).digest("base64url");

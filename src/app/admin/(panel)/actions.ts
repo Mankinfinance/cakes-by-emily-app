@@ -232,12 +232,13 @@ export async function sendForApprovalAction(form: FormData): Promise<ActionResul
   }
 }
 
-export async function toggleKitchenAction(kind: "cake" | "box", id: string, done: boolean): Promise<ActionResult> {
+export async function toggleKitchenAction(kind: "cake" | "box" | "corporate", id: string, done: boolean): Promise<ActionResult> {
   await requireAdmin();
   try {
     const repo = await getRepo();
     if (kind === "cake") await repo.updateOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
-    else await repo.updateBoxOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    else if (kind === "box") await repo.updateBoxOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    else await repo.setCorporateKitchenDone(uuid.parse(id), z.boolean().parse(done));
     revalidatePath("/admin/kitchen");
     return { ok: true };
   } catch (err) {

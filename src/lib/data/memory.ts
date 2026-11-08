@@ -4,9 +4,20 @@
 // the row locks the Supabase adapter relies on.
 
 import { randomUUID } from "node:crypto";
+import { summarise } from "../domain/snapshot";
+import { todayInBusinessTz } from "../domain/dates";
 import type {
   Automation,
   BoxOrder,
+  ClassBooking,
+  ClassSession,
+  ClassType,
+  CorporateOrder,
+  CorporatePackage,
+  PrivateRequest,
+  Referral,
+  ReferralCode,
+  Review,
   Order,
   OrderUpdate,
   Payment,
@@ -17,7 +28,15 @@ import type {
 } from "../domain/types";
 import { isActiveOffer } from "../domain/waitlist";
 import { PAYMENT_HOLD_MINUTES, type MediaFile, type NewOrder, type Repository } from "./repository";
-import { SAMPLE_AUTOMATIONS, SAMPLE_BOXES, SAMPLE_CATALOGUE, SAMPLE_PEAK_DATES, SAMPLE_SETTINGS } from "./sample-data";
+import {
+  SAMPLE_AUTOMATIONS,
+  SAMPLE_BOXES,
+  SAMPLE_CATALOGUE,
+  SAMPLE_CLASS_TYPES,
+  SAMPLE_CORPORATE,
+  SAMPLE_PEAK_DATES,
+  SAMPLE_SETTINGS,
+} from "./sample-data";
 
 interface Redemption {
   voucherId: string;
@@ -43,6 +62,16 @@ interface Store {
   boxOrders: BoxOrder[];
   vouchers: Voucher[];
   redemptions: Redemption[];
+  corporatePackages: CorporatePackage[];
+  corporateOrders: CorporateOrder[];
+  reviews: Review[];
+  referralCodes: ReferralCode[];
+  referrals: Referral[];
+  classTypes: ClassType[];
+  sessions: ClassSession[];
+  bookings: ClassBooking[];
+  bookingMessages: { bookingId: string; key: string }[];
+  privateRequests: PrivateRequest[];
 }
 
 function freshStore(): Store {
@@ -63,6 +92,16 @@ function freshStore(): Store {
     boxOrders: [],
     vouchers: [],
     redemptions: [],
+    corporatePackages: structuredClone(SAMPLE_CORPORATE),
+    corporateOrders: [],
+    reviews: [],
+    referralCodes: [],
+    referrals: [],
+    classTypes: structuredClone(SAMPLE_CLASS_TYPES),
+    sessions: [],
+    bookings: [],
+    bookingMessages: [],
+    privateRequests: [],
   };
 }
 
@@ -83,10 +122,13 @@ export function getMemoryMedia(path: string): MediaFile | undefined {
 }
 
 /** Test helper: change creation times to simulate old unpaid orders. */
-export function backdateMemoryRecord(kind: "order" | "box", id: string, createdAt: string): void {
-  const list = kind === "order" ? store().orders : store().boxOrders;
+export function backdateMemoryRecord(kind: "order" | "box" | "corporate" | "booking", id: string, createdAt: string): void {
+  const s = store();
+  const list: { id: string; createdAt: string }[] =
+    kind === "order" ? s.orders : kind === "box" ? s.boxOrders : kind === "corporate" ? s.corporateOrders : s.bookings;
   const rec = list.find((x) => x.id === id);
   if (rec) rec.createdAt = createdAt;
+  if (kind === "order") for (const p of s.payments) if (p.orderId === id) p.createdAt = createdAt;
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
@@ -146,9 +188,14 @@ export const memoryRepository: Repository = {
       )
       .map((o) => ({ pickupDate: o.pickupDate, pickupSlot: o.pickupSlot }));
     const offers = store()
-      .waitlist.filter((w) => w.id !== query?.excludeWaitlistId && isActiveOffer(w, now) && w.date >= fromDate && w.date <= toDate)
+      .waitlist.filter((w) => !w.sessionId && w.id !== query?.excludeWaitlistId && isActiveOffer(w, now) && w.date >= fromDate && w.date <= toDate)
       .map((w) => ({ pickupDate: w.date, pickupSlot: "" }));
-    return [...orders, ...offers];
+    const corporate = store()
+      .corporateOrders.filter(
+        (o) => o.status !== "cancelled" && (o.status !== "awaiting_payment" || o.createdAt >= holdSince) && o.pickupDate >= fromDate && o.pickupDate <= toDate,
+      )
+      .map((o) => ({ pickupDate: o.pickupDate, pickupSlot: o.pickupSlot }));
+    return [...orders, ...offers, ...corporate];
   },
   async createOrder(input: NewOrder) {
     const order: Order = {
@@ -240,6 +287,24 @@ export const memoryRepository: Repository = {
         v.status = "active";
         v.balanceCents = v.amountCents;
       }
+    } else if (payment.corporateOrderId) {
+      const c = s.corporateOrders.find((x) => x.id === payment.corporateOrderId);
+      if (c) {
+        c.amountPaidCents += payment.amountCents;
+        if (c.status === "awaiting_payment") c.status = "confirmed";
+      }
+    } else if (payment.classBookingId) {
+      const b = s.bookings.find((x) => x.id === payment.classBookingId);
+      if (b) {
+        b.amountPaidCents += payment.amountCents;
+        if (b.status === "awaiting_payment") b.status = "paid";
+      }
+    } else if (payment.privateRequestId) {
+      const r = s.privateRequests.find((x) => x.id === payment.privateRequestId);
+      if (r) {
+        r.amountPaidCents += payment.amountCents;
+        if (r.status === "accepted") r.status = "paid";
+      }
     }
     return true;
   },
@@ -296,6 +361,8 @@ export const memoryRepository: Repository = {
 
   async addWaitlist(entry) {
     const w: WaitlistEntry = {
+      sessionId: null,
+      seats: 1,
       ...clone(entry),
       id: randomUUID(),
       status: "waiting",
@@ -311,7 +378,12 @@ export const memoryRepository: Repository = {
   async listWaitlist(opts) {
     return clone(
       store()
-        .waitlist.filter((w) => (!opts?.date || w.date === opts.date) && (!opts?.fromDate || w.date >= opts.fromDate))
+        .waitlist.filter(
+          (w) =>
+            (opts?.all || (opts?.sessionId ? w.sessionId === opts.sessionId : !w.sessionId)) &&
+            (!opts?.date || w.date === opts.date) &&
+            (!opts?.fromDate || w.date >= opts.fromDate),
+        )
         .sort((a, b) => a.date.localeCompare(b.date) || byCreated(a, b)),
     );
   },
@@ -327,7 +399,7 @@ export const memoryRepository: Repository = {
     const s = store();
     const w = s.waitlist.find((x) => x.id === id);
     if (!w || w.status !== "waiting") return false;
-    if (s.waitlist.some((x) => x.date === w.date && x.status === "offered")) return false;
+    if (s.waitlist.some((x) => x.date === w.date && (x.sessionId ?? null) === (w.sessionId ?? null) && x.status === "offered")) return false;
     Object.assign(w, { status: "offered", offerTokenHash: tokenHash, offeredAt, offerExpiresAt: expiresAt });
     return true;
   },
@@ -451,5 +523,222 @@ export const memoryRepository: Repository = {
     }
     s.redemptions.push({ voucherId: v.id, orderId, amountCents: -net, note: "reissued as new credit" });
     return { amount: net, toVoucher: false };
+  },
+
+  async listOrdersByEmail(email) {
+    return clone(store().orders.filter((o) => o.email.toLowerCase() === email.toLowerCase()));
+  },
+
+  async listCorporatePackages() {
+    return clone(store().corporatePackages).sort((a, b) => a.sort - b.sort);
+  },
+  async updateCorporatePackage(id, patch) {
+    const p = store().corporatePackages.find((x) => x.id === id);
+    if (p) Object.assign(p, clone(patch));
+  },
+  async createCorporateOrder(input) {
+    const o: CorporateOrder = { ...clone(input), amountPaidCents: 0, status: "awaiting_payment", kitchenDone: false, createdAt: new Date().toISOString() };
+    store().corporateOrders.push(o);
+    return clone(o);
+  },
+  async getCorporateOrderById(id) {
+    const o = store().corporateOrders.find((x) => x.id === id);
+    return o ? clone(o) : null;
+  },
+  async getCorporateOrderByTokenHash(tokenHash) {
+    const o = store().corporateOrders.find((x) => x.tokenHash === tokenHash);
+    return o ? clone(o) : null;
+  },
+  async listCorporateOrders(opts) {
+    return clone(
+      store()
+        .corporateOrders.filter((o) => opts?.includeUnpaid || o.status !== "awaiting_payment")
+        .sort((a, b) => (a.pickupDate + a.pickupSlot).localeCompare(b.pickupDate + b.pickupSlot)),
+    );
+  },
+  async listStaleUnpaidCorporate(before) {
+    return clone(store().corporateOrders.filter((o) => o.status === "awaiting_payment" && o.createdAt < before));
+  },
+  async setCorporateStatus(id, status, from) {
+    const o = store().corporateOrders.find((x) => x.id === id);
+    if (!o || !from.includes(o.status)) return false;
+    o.status = status;
+    return true;
+  },
+  async setCorporateKitchenDone(id, done) {
+    const o = store().corporateOrders.find((x) => x.id === id);
+    if (o) o.kitchenDone = done;
+  },
+
+  async createReview(r) {
+    const s = store();
+    if (s.reviews.some((x) => x.orderId === r.orderId)) return null;
+    const review: Review = { ...clone(r), id: randomUUID(), status: "pending", createdAt: new Date().toISOString() };
+    s.reviews.push(review);
+    return clone(review);
+  },
+  async getReviewByOrder(orderId) {
+    const r = store().reviews.find((x) => x.orderId === orderId);
+    return r ? clone(r) : null;
+  },
+  async listReviews(opts) {
+    return clone(store().reviews.filter((r) => !opts?.status || r.status === opts.status)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+  async setReviewStatus(id, status) {
+    const r = store().reviews.find((x) => x.id === id);
+    if (!r) return;
+    if (status === "approved" && !r.consentToPublish) throw new Error("This review can't be published without the customer's consent.");
+    r.status = status;
+  },
+
+  async getReferralCodeByEmail(email) {
+    const c = store().referralCodes.find((x) => x.email === email.toLowerCase());
+    return c ? clone(c) : null;
+  },
+  async getReferralCode(code) {
+    const c = store().referralCodes.find((x) => x.code === code);
+    return c ? clone(c) : null;
+  },
+  async createReferralCode(code, email) {
+    const s = store();
+    if (s.referralCodes.some((x) => x.code === code || x.email === email.toLowerCase())) return false;
+    s.referralCodes.push({ code, email: email.toLowerCase(), createdAt: new Date().toISOString() });
+    return true;
+  },
+  async createReferral(r) {
+    const s = store();
+    if (r.referrerEmail.toLowerCase() === r.referredEmail.toLowerCase()) return false;
+    if (s.referrals.some((x) => x.orderId === r.orderId || (x.status !== "void" && x.referredEmail.toLowerCase() === r.referredEmail.toLowerCase()))) return false;
+    s.referrals.push({ ...clone(r), id: randomUUID(), status: "pending", createdAt: new Date().toISOString() });
+    return true;
+  },
+  async listReferrals() {
+    return clone(store().referrals).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+  async rewardReferralOnce(orderId) {
+    const r = store().referrals.find((x) => x.orderId === orderId && x.status === "pending");
+    if (!r) return null;
+    r.status = "rewarded";
+    return clone(r);
+  },
+  async voidReferral(orderId) {
+    const r = store().referrals.find((x) => x.orderId === orderId && x.status === "pending");
+    if (r) r.status = "void";
+  },
+
+  async listClassTypes() {
+    return clone(store().classTypes).sort((a, b) => a.sort - b.sort);
+  },
+  async updateClassType(id, patch) {
+    const t = store().classTypes.find((x) => x.id === id);
+    if (t) Object.assign(t, clone(patch));
+  },
+  async listSessions(opts) {
+    return clone(
+      store()
+        .sessions.filter((x) => (opts?.includeCancelled || x.status === "scheduled") && (!opts?.fromDate || x.date >= opts.fromDate))
+        .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime)),
+    );
+  },
+  async getSession(id) {
+    const x = store().sessions.find((y) => y.id === id);
+    return x ? clone(x) : null;
+  },
+  async createSession(input) {
+    const x: ClassSession = { ...clone(input), booked: 0, createdAt: new Date().toISOString() };
+    store().sessions.push(x);
+    return clone(x);
+  },
+  async updateSession(id, patch) {
+    const x = store().sessions.find((y) => y.id === id);
+    if (!x) return;
+    if (patch.seats !== undefined && patch.seats < x.booked) throw new Error("Seats can't go below the number already booked.");
+    Object.assign(x, clone(patch));
+  },
+  async reserveSeats(sessionId, seats) {
+    const x = store().sessions.find((y) => y.id === sessionId);
+    if (!x || seats < 1 || x.status !== "scheduled" || x.booked + seats > x.seats) return false;
+    x.booked += seats;
+    return true;
+  },
+  async releaseSeats(sessionId, seats) {
+    const x = store().sessions.find((y) => y.id === sessionId);
+    if (x) x.booked = Math.max(0, x.booked - seats);
+  },
+  async createBooking(input) {
+    const b: ClassBooking = { ...clone(input), amountPaidCents: 0, status: "awaiting_payment", cancellation: null, createdAt: new Date().toISOString() };
+    store().bookings.push(b);
+    return clone(b);
+  },
+  async getBookingById(id) {
+    const b = store().bookings.find((x) => x.id === id);
+    return b ? clone(b) : null;
+  },
+  async getBookingByTokenHash(tokenHash) {
+    const b = store().bookings.find((x) => x.tokenHash === tokenHash);
+    return b ? clone(b) : null;
+  },
+  async listBookings(opts) {
+    return clone(
+      store()
+        .bookings.filter((b) => (!opts?.sessionId || b.sessionId === opts.sessionId) && (opts?.includeUnpaid || b.status !== "awaiting_payment"))
+        .sort(byCreated),
+    );
+  },
+  async listStaleUnpaidBookings(before) {
+    return clone(store().bookings.filter((b) => b.status === "awaiting_payment" && b.createdAt < before));
+  },
+  async updateBookingGuests(id, guests) {
+    const b = store().bookings.find((x) => x.id === id);
+    if (b) b.guests = clone(guests);
+  },
+  async cancelBookingOnce(id, onlyUnpaid, record) {
+    const s = store();
+    const b = s.bookings.find((x) => x.id === id);
+    if (!b || (b.status !== "awaiting_payment" && b.status !== "paid")) return false;
+    if (onlyUnpaid && b.status !== "awaiting_payment") return false;
+    b.status = "cancelled";
+    b.cancellation = clone(record);
+    const x = s.sessions.find((y) => y.id === b.sessionId);
+    if (x) x.booked = Math.max(0, x.booked - b.seats);
+    return true;
+  },
+  async claimBookingMessage(bookingId, key) {
+    const s = store();
+    if (s.bookingMessages.some((m) => m.bookingId === bookingId && m.key === key)) return false;
+    s.bookingMessages.push({ bookingId, key });
+    return true;
+  },
+  async releaseBookingMessage(bookingId, key) {
+    const s = store();
+    s.bookingMessages = s.bookingMessages.filter((m) => !(m.bookingId === bookingId && m.key === key));
+  },
+  async createPrivateRequest(input) {
+    const r: PrivateRequest = { ...clone(input), status: "requested", payTokenHash: null, amountPaidCents: 0, createdAt: new Date().toISOString() };
+    store().privateRequests.push(r);
+    return clone(r);
+  },
+  async getPrivateRequest(id) {
+    const r = store().privateRequests.find((x) => x.id === id);
+    return r ? clone(r) : null;
+  },
+  async getPrivateRequestByPayHash(hash) {
+    const r = store().privateRequests.find((x) => x.payTokenHash === hash);
+    return r ? clone(r) : null;
+  },
+  async listPrivateRequests() {
+    return clone(store().privateRequests).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+  async setPrivateStatus(id, status, from, payTokenHash) {
+    const r = store().privateRequests.find((x) => x.id === id);
+    if (!r || r.status !== from) return false;
+    r.status = status;
+    if (payTokenHash) r.payTokenHash = payTokenHash;
+    return true;
+  },
+
+  async salesSummary(from, to) {
+    const s = store();
+    return summarise(s.orders, s.payments, from, to, (iso) => todayInBusinessTz(new Date(iso)));
   },
 };

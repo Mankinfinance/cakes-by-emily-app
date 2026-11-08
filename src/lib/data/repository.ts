@@ -1,10 +1,20 @@
 // The data adapter interface. The live site uses Supabase; automated tests
 // use the in-memory adapter (DATA_ADAPTER=memory) so they never touch real data.
 
+import type { SalesSummary } from "../domain/snapshot";
 import type {
   Automation,
   BoxOrder,
   CatalogueItem,
+  ClassBooking,
+  ClassSession,
+  ClassType,
+  CorporateOrder,
+  CorporatePackage,
+  PrivateRequest,
+  Referral,
+  ReferralCode,
+  Review,
   DayOff,
   Order,
   OrderUpdate,
@@ -74,6 +84,9 @@ export interface BookingQuery {
 export type NewBoxOrder = Omit<BoxOrder, "createdAt" | "amountPaidCents" | "status" | "kitchenDone">;
 export type NewVoucher = Omit<Voucher, "createdAt">;
 export type NewWaitlistEntry = Omit<WaitlistEntry, "id" | "createdAt" | "status" | "offerTokenHash" | "offeredAt" | "offerExpiresAt" | "orderId">;
+export type NewCorporateOrder = Omit<CorporateOrder, "createdAt" | "amountPaidCents" | "status" | "kitchenDone">;
+export type NewClassBooking = Omit<ClassBooking, "createdAt" | "amountPaidCents" | "status" | "cancellation">;
+export type NewPrivateRequest = Omit<PrivateRequest, "createdAt" | "amountPaidCents" | "status" | "payTokenHash">;
 
 export interface Repository {
   // Catalogue and settings
@@ -143,13 +156,14 @@ export interface Repository {
 
   // Waitlist
   addWaitlist(entry: NewWaitlistEntry): Promise<WaitlistEntry>;
-  listWaitlist(opts?: { date?: string; fromDate?: string }): Promise<WaitlistEntry[]>;
+  /** Cake waitlist entries unless sessionId is given (then that class session's). */
+  listWaitlist(opts?: { date?: string; fromDate?: string; sessionId?: string; all?: boolean }): Promise<WaitlistEntry[]>;
   getWaitlistById(id: string): Promise<WaitlistEntry | null>;
   getWaitlistByOfferHash(hash: string): Promise<WaitlistEntry | null>;
-  /** waiting -> offered, only if still waiting and no other live offer exists for the date. */
+  /** waiting -> offered, only if still waiting and no other live offer exists for the date (or class session). */
   offerWaitlist(id: string, tokenHash: string, offeredAt: string, expiresAt: string): Promise<boolean>;
   /** offered -> claimed, only if the offer is still live. */
-  claimWaitlist(id: string, orderId: string, now: string): Promise<boolean>;
+  claimWaitlist(id: string, orderId: string | null, now: string): Promise<boolean>;
   setWaitlistStatus(id: string, status: WaitlistEntry["status"]): Promise<void>;
 
   // Seasonal boxes
@@ -178,4 +192,70 @@ export interface Repository {
   redeemVoucher(codeHash: string, orderId: string, maxCents: number, today: string): Promise<number>;
   /** Give back what an order used, once. toVoucher=false means the caller must issue a new credit code. */
   returnVoucher(orderId: string, today: string): Promise<{ amount: number; toVoucher: boolean }>;
+
+  // Phase 3 -----------------------------------------------------------------
+  /** Every order (any stage) placed with this email. */
+  listOrdersByEmail(email: string): Promise<Order[]>;
+
+  // Corporate packages
+  listCorporatePackages(): Promise<CorporatePackage[]>;
+  updateCorporatePackage(id: string, patch: Partial<Pick<CorporatePackage, "name" | "priceCents" | "visible">>): Promise<void>;
+  createCorporateOrder(order: NewCorporateOrder): Promise<CorporateOrder>;
+  getCorporateOrderById(id: string): Promise<CorporateOrder | null>;
+  getCorporateOrderByTokenHash(tokenHash: string): Promise<CorporateOrder | null>;
+  listCorporateOrders(opts?: { includeUnpaid?: boolean }): Promise<CorporateOrder[]>;
+  listStaleUnpaidCorporate(before: string): Promise<CorporateOrder[]>;
+  /** Change status only if it is currently one of `from`. */
+  setCorporateStatus(id: string, status: CorporateOrder["status"], from: CorporateOrder["status"][]): Promise<boolean>;
+  setCorporateKitchenDone(id: string, done: boolean): Promise<void>;
+
+  // Reviews
+  /** One review per order: returns null if this order already has one. */
+  createReview(r: Omit<Review, "id" | "createdAt" | "status">): Promise<Review | null>;
+  getReviewByOrder(orderId: string): Promise<Review | null>;
+  listReviews(opts?: { status?: Review["status"] }): Promise<Review[]>;
+  setReviewStatus(id: string, status: Review["status"]): Promise<void>;
+
+  // Referrals
+  getReferralCodeByEmail(email: string): Promise<ReferralCode | null>;
+  getReferralCode(code: string): Promise<ReferralCode | null>;
+  /** False if the code or the email already has a code. */
+  createReferralCode(code: string, email: string): Promise<boolean>;
+  /** False if this customer has already been referred (or the order already has a referral). */
+  createReferral(r: Omit<Referral, "id" | "createdAt" | "status">): Promise<boolean>;
+  listReferrals(): Promise<Referral[]>;
+  /** pending -> rewarded for this order's referral, exactly once. Returns it if this call rewarded it. */
+  rewardReferralOnce(orderId: string): Promise<Referral | null>;
+  /** pending -> void (the order was never paid), freeing the customer to be referred again. */
+  voidReferral(orderId: string): Promise<void>;
+
+  // Classes
+  listClassTypes(): Promise<ClassType[]>;
+  updateClassType(id: string, patch: Partial<Pick<ClassType, "priceCents" | "visible" | "minGuests" | "description">>): Promise<void>;
+  listSessions(opts?: { fromDate?: string; includeCancelled?: boolean }): Promise<ClassSession[]>;
+  getSession(id: string): Promise<ClassSession | null>;
+  createSession(s: Omit<ClassSession, "createdAt" | "booked">): Promise<ClassSession>;
+  updateSession(id: string, patch: Partial<Pick<ClassSession, "date" | "startTime" | "seats" | "status">>): Promise<void>;
+  /** Atomically take seats. False if there aren't enough or the class is cancelled. */
+  reserveSeats(sessionId: string, seats: number): Promise<boolean>;
+  releaseSeats(sessionId: string, seats: number): Promise<void>;
+  createBooking(b: NewClassBooking): Promise<ClassBooking>;
+  getBookingById(id: string): Promise<ClassBooking | null>;
+  getBookingByTokenHash(tokenHash: string): Promise<ClassBooking | null>;
+  listBookings(opts?: { sessionId?: string; includeUnpaid?: boolean }): Promise<ClassBooking[]>;
+  listStaleUnpaidBookings(before: string): Promise<ClassBooking[]>;
+  updateBookingGuests(id: string, guests: ClassBooking["guests"]): Promise<void>;
+  /** Cancel once and give the seats back. */
+  cancelBookingOnce(id: string, onlyUnpaid: boolean, record: ClassBooking["cancellation"]): Promise<boolean>;
+  claimBookingMessage(bookingId: string, key: string): Promise<boolean>;
+  releaseBookingMessage(bookingId: string, key: string): Promise<void>;
+  createPrivateRequest(r: NewPrivateRequest): Promise<PrivateRequest>;
+  getPrivateRequest(id: string): Promise<PrivateRequest | null>;
+  getPrivateRequestByPayHash(hash: string): Promise<PrivateRequest | null>;
+  listPrivateRequests(): Promise<PrivateRequest[]>;
+  /** Change status (and optionally set the pay link hash) only if it is currently `from`. */
+  setPrivateStatus(id: string, status: PrivateRequest["status"], from: PrivateRequest["status"], payTokenHash?: string): Promise<boolean>;
+
+  // Sales snapshot (money and counts for orders booked between two Sydney dates)
+  salesSummary(from: string, to: string): Promise<SalesSummary>;
 }

@@ -15,3 +15,14 @@ export async function boxOrderFromToken(token: string) {
   const repo = await getRepo();
   return repo.getBoxOrderByTokenHash(hashToken(token));
 }
+
+/** Phase 3: corporate orders and class bookings by their private link tokens. */
+export async function corporateFromToken(token: string) {
+  if (!looksLikeToken(token)) return null;
+  return (await getRepo()).getCorporateOrderByTokenHash(hashToken(token));
+}
+
+export async function bookingFromToken(token: string) {
+  if (!looksLikeToken(token)) return null;
+  return (await getRepo()).getBookingByTokenHash(hashToken(token));
+}

@@ -3,11 +3,20 @@
 
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SalesSummary } from "../domain/snapshot";
 import type {
   Allergen,
   Automation,
   AutomationKey,
   BoxOrder,
+  ClassBooking,
+  ClassSession,
+  ClassType,
+  CorporateOrder,
+  CorporatePackage,
+  PrivateRequest,
+  Referral,
+  Review,
   CakeConfig,
   CatalogueItem,
   Category,
@@ -61,6 +70,7 @@ function toItem(r: Row): CatalogueItem {
     allergens: (r.allergens as Allergen[]) ?? [],
     visible: r.visible as boolean,
     sort: r.sort as number,
+    bondCents: (r.bond_cents as number) ?? 0,
   };
 }
 
@@ -106,6 +116,8 @@ function toOrder(r: Row, items: Row[] = []): Order {
     waitlistId: (r.waitlist_id as string | null) ?? null,
     kitchenDone: (r.kitchen_done as boolean) ?? false,
     cancellation: (r.cancellation as Order["cancellation"]) ?? null,
+    referralCode: (r.referral_code as string | null) ?? null,
+    stampReward: (r.stamp_reward as boolean) ?? false,
   };
 }
 
@@ -135,6 +147,8 @@ function toWaitlist(r: Row): WaitlistEntry {
     offerExpiresAt: (r.offer_expires_at as string | null) ?? null,
     orderId: (r.order_id as string | null) ?? null,
     createdAt: r.created_at as string,
+    sessionId: (r.session_id as string | null) ?? null,
+    seats: (r.seats as number) ?? 1,
   };
 }
 
@@ -213,6 +227,139 @@ function toVoucher(r: Row): Voucher {
   };
 }
 
+function toCorporate(r: Row): CorporateOrder {
+  return {
+    id: r.id as string,
+    reference: r.reference as string,
+    tokenHash: r.token_hash as string,
+    packageId: r.package_id as string,
+    packageName: r.package_name as string,
+    quantity: r.quantity as number,
+    totalCents: r.total_cents as number,
+    depositCents: r.deposit_cents as number,
+    amountPaidCents: r.amount_paid_cents as number,
+    companyName: r.company_name as string,
+    abn: (r.abn as string) ?? "",
+    contactName: r.contact_name as string,
+    email: r.email as string,
+    phone: r.phone as string,
+    logoPath: (r.logo_path as string | null) ?? null,
+    notes: (r.notes as string) ?? "",
+    pickupDate: r.pickup_date as string,
+    pickupSlot: r.pickup_slot as string,
+    status: r.status as CorporateOrder["status"],
+    kitchenDone: r.kitchen_done as boolean,
+    termsAcceptedAt: r.terms_accepted_at as string,
+    createdAt: r.created_at as string,
+  };
+}
+
+function toReview(r: Row): Review {
+  return {
+    id: r.id as string,
+    orderId: r.order_id as string,
+    rating: r.rating as number,
+    text: (r.text as string) ?? "",
+    photoPath: (r.photo_path as string | null) ?? null,
+    consentToPublish: r.consent_to_publish as boolean,
+    displayName: r.display_name as string,
+    status: r.status as Review["status"],
+    createdAt: r.created_at as string,
+  };
+}
+
+function toReferral(r: Row): Referral {
+  return {
+    id: r.id as string,
+    code: r.code as string,
+    referrerEmail: r.referrer_email as string,
+    referredEmail: r.referred_email as string,
+    orderId: r.order_id as string,
+    status: r.status as Referral["status"],
+    createdAt: r.created_at as string,
+  };
+}
+
+function toClassType(r: Row): ClassType {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    description: (r.description as string) ?? "",
+    level: (r.level as string) ?? "",
+    priceCents: r.price_cents as number,
+    durationMinutes: r.duration_minutes as number,
+    defaultSeats: r.default_seats as number,
+    minGuests: r.min_guests as number,
+    isSip: r.is_sip as boolean,
+    ageNote: (r.age_note as string) ?? "",
+    visible: r.visible as boolean,
+    sort: r.sort as number,
+  };
+}
+
+function toSession(r: Row): ClassSession {
+  return {
+    id: r.id as string,
+    classTypeId: r.class_type_id as string,
+    date: r.date as string,
+    startTime: r.start_time as string,
+    seats: r.seats as number,
+    booked: r.booked as number,
+    status: r.status as ClassSession["status"],
+    seriesId: (r.series_id as string | null) ?? null,
+    createdAt: r.created_at as string,
+  };
+}
+
+function toBooking(r: Row): ClassBooking {
+  return {
+    id: r.id as string,
+    reference: r.reference as string,
+    tokenHash: r.token_hash as string,
+    sessionId: r.session_id as string,
+    seats: r.seats as number,
+    guests: (r.guests as ClassBooking["guests"]) ?? [],
+    contactName: r.contact_name as string,
+    email: r.email as string,
+    phone: r.phone as string,
+    unitPriceCents: r.unit_price_cents as number,
+    discountCents: r.discount_cents as number,
+    totalCents: r.total_cents as number,
+    amountPaidCents: r.amount_paid_cents as number,
+    status: r.status as ClassBooking["status"],
+    adultConfirmed: r.adult_confirmed as boolean,
+    marketingOptIn: r.marketing_opt_in as boolean,
+    waitlistId: (r.waitlist_id as string | null) ?? null,
+    cancellation: (r.cancellation as ClassBooking["cancellation"]) ?? null,
+    termsAcceptedAt: r.terms_accepted_at as string,
+    createdAt: r.created_at as string,
+  };
+}
+
+function toPrivate(r: Row): PrivateRequest {
+  return {
+    id: r.id as string,
+    reference: r.reference as string,
+    packageKey: r.package_key as string,
+    packageName: r.package_name as string,
+    guests: r.guests as number,
+    perPersonCents: r.per_person_cents as number,
+    depositCents: r.deposit_cents as number,
+    estimateCents: r.estimate_cents as number,
+    preferredDate: r.preferred_date as string,
+    preferredTime: r.preferred_time as string,
+    occasion: (r.occasion as string) ?? "",
+    contactName: r.contact_name as string,
+    email: r.email as string,
+    phone: r.phone as string,
+    notes: (r.notes as string) ?? "",
+    status: r.status as PrivateRequest["status"],
+    payTokenHash: (r.pay_token_hash as string | null) ?? null,
+    amountPaidCents: r.amount_paid_cents as number,
+    createdAt: r.created_at as string,
+  };
+}
+
 /** Postgres unique violation, e.g. a second live waitlist offer for the same date. */
 function isUniqueViolation(error: { code?: string } | null): boolean {
   return error?.code === "23505";
@@ -235,6 +382,7 @@ const ITEM_PATCH_COLUMNS: Record<string, string> = {
   allergens: "allergens",
   visible: "visible",
   sort: "sort",
+  bondCents: "bond_cents",
 };
 
 export const supabaseRepository: Repository = {
@@ -264,6 +412,7 @@ export const supabaseRepository: Repository = {
         allergens: item.allergens,
         visible: item.visible,
         sort: item.sort,
+        bond_cents: item.bondCents,
       }),
     );
   },
@@ -307,7 +456,7 @@ export const supabaseRepository: Repository = {
   async listActiveBookings(fromDate, toDate, query) {
     const nowIso = new Date().toISOString();
     const holdSince = new Date(Date.now() - PAYMENT_HOLD_MINUTES * 60_000).toISOString();
-    const [orderRows, offerRows] = await Promise.all([
+    const [orderRows, offerRows, corporateRows] = await Promise.all([
       db()
         .from("orders")
         .select("id,pickup_date,pickup_slot,stage,created_at")
@@ -318,9 +467,16 @@ export const supabaseRepository: Repository = {
         .from("waitlist")
         .select("id,date")
         .eq("status", "offered")
+        .is("session_id", null)
         .gt("offer_expires_at", nowIso)
         .gte("date", fromDate)
         .lte("date", toDate),
+      db()
+        .from("corporate_orders")
+        .select("pickup_date,pickup_slot,status,created_at")
+        .gte("pickup_date", fromDate)
+        .lte("pickup_date", toDate)
+        .neq("status", "cancelled"),
     ]);
     const orders = (check(orderRows) as Row[])
       .filter((r) => r.id !== query?.excludeOrderId)
@@ -329,7 +485,10 @@ export const supabaseRepository: Repository = {
     const offers = (check(offerRows) as Row[])
       .filter((r) => r.id !== query?.excludeWaitlistId)
       .map((r) => ({ pickupDate: r.date as string, pickupSlot: "" }));
-    return [...orders, ...offers];
+    const corporate = (check(corporateRows) as Row[])
+      .filter((r) => r.status !== "awaiting_payment" || (r.created_at as string) >= holdSince)
+      .map((r) => ({ pickupDate: r.pickup_date as string, pickupSlot: r.pickup_slot as string }));
+    return [...orders, ...offers, ...corporate];
   },
   async createOrder(o) {
     const row = check(
@@ -360,6 +519,8 @@ export const supabaseRepository: Repository = {
           dietary: o.dietary,
           remind_next_year: o.remindNextYear,
           waitlist_id: o.waitlistId,
+          referral_code: o.referralCode,
+          stamp_reward: o.stampReward,
         })
         .select("*")
         .single(),
@@ -435,6 +596,9 @@ export const supabaseRepository: Repository = {
           order_id: p.orderId,
           box_order_id: p.boxOrderId,
           voucher_id: p.voucherId,
+          corporate_order_id: p.corporateOrderId ?? null,
+          class_booking_id: p.classBookingId ?? null,
+          private_request_id: p.privateRequestId ?? null,
           kind: p.kind,
           amount_cents: p.amountCents,
           stripe_session_id: p.stripeSessionId,
@@ -532,6 +696,8 @@ export const supabaseRepository: Repository = {
           phone: e.phone,
           config: e.config,
           dietary: e.dietary,
+          session_id: e.sessionId ?? null,
+          seats: e.seats ?? 1,
         })
         .select("*")
         .single(),
@@ -540,6 +706,7 @@ export const supabaseRepository: Repository = {
   },
   async listWaitlist(opts) {
     let q = db().from("waitlist").select("*").order("date").order("created_at").limit(1000);
+    if (!opts?.all) q = opts?.sessionId ? q.eq("session_id", opts.sessionId) : q.is("session_id", null);
     if (opts?.date) q = q.eq("date", opts.date);
     if (opts?.fromDate) q = q.gte("date", opts.fromDate);
     return (check(await q) as Row[]).map(toWaitlist);
@@ -567,7 +734,7 @@ export const supabaseRepository: Repository = {
     const rows = check(
       await db()
         .from("waitlist")
-        .update({ status: "claimed", order_id: orderId })
+        .update({ status: "claimed", order_id: orderId ?? null })
         .eq("id", id)
         .eq("status", "offered")
         .gt("offer_expires_at", now)
@@ -716,6 +883,305 @@ export const supabaseRepository: Repository = {
     const r = rows?.[0];
     return { amount: (r?.amount as number) ?? 0, toVoucher: (r?.to_voucher as boolean) ?? false };
   },
+
+  async listOrdersByEmail(email) {
+    const rows = check(await db().from("orders").select("*").ilike("email", email.replace(/[%_]/g, "")).limit(500)) as Row[];
+    return withItems(rows);
+  },
+
+  async listCorporatePackages() {
+    const rows = check(await db().from("corporate_packages").select("*").order("sort")) as Row[];
+    return rows.map(
+      (r): CorporatePackage => ({
+        id: r.id as string,
+        product: r.product as CorporatePackage["product"],
+        name: r.name as string,
+        quantity: r.quantity as number,
+        priceCents: r.price_cents as number,
+        visible: r.visible as boolean,
+        sort: r.sort as number,
+      }),
+    );
+  },
+  async updateCorporatePackage(id, patch) {
+    const row: Row = {};
+    if (patch.name !== undefined) row.name = patch.name;
+    if (patch.priceCents !== undefined) row.price_cents = patch.priceCents;
+    if (patch.visible !== undefined) row.visible = patch.visible;
+    if (Object.keys(row).length) check(await db().from("corporate_packages").update(row).eq("id", id));
+  },
+  async createCorporateOrder(o) {
+    const row = check(
+      await db()
+        .from("corporate_orders")
+        .insert({
+          id: o.id,
+          reference: o.reference,
+          token_hash: o.tokenHash,
+          package_id: o.packageId,
+          package_name: o.packageName,
+          quantity: o.quantity,
+          total_cents: o.totalCents,
+          deposit_cents: o.depositCents,
+          company_name: o.companyName,
+          abn: o.abn,
+          contact_name: o.contactName,
+          email: o.email,
+          phone: o.phone,
+          logo_path: o.logoPath,
+          notes: o.notes,
+          pickup_date: o.pickupDate,
+          pickup_slot: o.pickupSlot,
+          terms_accepted_at: o.termsAcceptedAt,
+        })
+        .select("*")
+        .single(),
+    ) as Row;
+    return toCorporate(row);
+  },
+  async getCorporateOrderById(id) {
+    const row = check(await db().from("corporate_orders").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toCorporate(row) : null;
+  },
+  async getCorporateOrderByTokenHash(tokenHash) {
+    const row = check(await db().from("corporate_orders").select("*").eq("token_hash", tokenHash).maybeSingle()) as Row | null;
+    return row ? toCorporate(row) : null;
+  },
+  async listCorporateOrders(opts) {
+    let q = db().from("corporate_orders").select("*").order("pickup_date").order("pickup_slot").limit(1000);
+    if (!opts?.includeUnpaid) q = q.neq("status", "awaiting_payment");
+    return (check(await q) as Row[]).map(toCorporate);
+  },
+  async listStaleUnpaidCorporate(before) {
+    const rows = check(await db().from("corporate_orders").select("*").eq("status", "awaiting_payment").lt("created_at", before).limit(200)) as Row[];
+    return rows.map(toCorporate);
+  },
+  async setCorporateStatus(id, status, from) {
+    const rows = check(await db().from("corporate_orders").update({ status }).eq("id", id).in("status", from).select("id")) as Row[];
+    return rows.length === 1;
+  },
+  async setCorporateKitchenDone(id, done) {
+    check(await db().from("corporate_orders").update({ kitchen_done: done }).eq("id", id));
+  },
+
+  async createReview(r) {
+    const { data, error } = await db()
+      .from("reviews")
+      .insert({
+        order_id: r.orderId,
+        rating: r.rating,
+        text: r.text,
+        photo_path: r.photoPath,
+        consent_to_publish: r.consentToPublish,
+        display_name: r.displayName,
+      })
+      .select("*")
+      .single();
+    if (isUniqueViolation(error)) return null;
+    if (error) throw new Error(`Database error: ${error.message}`);
+    return toReview(data as Row);
+  },
+  async getReviewByOrder(orderId) {
+    const row = check(await db().from("reviews").select("*").eq("order_id", orderId).maybeSingle()) as Row | null;
+    return row ? toReview(row) : null;
+  },
+  async listReviews(opts) {
+    let q = db().from("reviews").select("*").order("created_at", { ascending: false }).limit(500);
+    if (opts?.status) q = q.eq("status", opts.status);
+    return (check(await q) as Row[]).map(toReview);
+  },
+  async setReviewStatus(id, status) {
+    check(await db().from("reviews").update({ status }).eq("id", id));
+  },
+
+  async getReferralCodeByEmail(email) {
+    const row = check(await db().from("referral_codes").select("*").eq("email", email.toLowerCase()).maybeSingle()) as Row | null;
+    return row ? { code: row.code as string, email: row.email as string, createdAt: row.created_at as string } : null;
+  },
+  async getReferralCode(code) {
+    const row = check(await db().from("referral_codes").select("*").eq("code", code).maybeSingle()) as Row | null;
+    return row ? { code: row.code as string, email: row.email as string, createdAt: row.created_at as string } : null;
+  },
+  async createReferralCode(code, email) {
+    const { error } = await db().from("referral_codes").insert({ code, email: email.toLowerCase() });
+    if (isUniqueViolation(error)) return false;
+    if (error) throw new Error(`Database error: ${error.message}`);
+    return true;
+  },
+  async createReferral(r) {
+    const { error } = await db()
+      .from("referrals")
+      .insert({ code: r.code, referrer_email: r.referrerEmail, referred_email: r.referredEmail, order_id: r.orderId });
+    if (isUniqueViolation(error) || error?.code === "23514") return false;
+    if (error) throw new Error(`Database error: ${error.message}`);
+    return true;
+  },
+  async listReferrals() {
+    return (check(await db().from("referrals").select("*").order("created_at", { ascending: false }).limit(500)) as Row[]).map(toReferral);
+  },
+  async rewardReferralOnce(orderId) {
+    const rows = check(
+      await db().from("referrals").update({ status: "rewarded" }).eq("order_id", orderId).eq("status", "pending").select("*"),
+    ) as Row[];
+    return rows[0] ? toReferral(rows[0]) : null;
+  },
+  async voidReferral(orderId) {
+    check(await db().from("referrals").update({ status: "void" }).eq("order_id", orderId).eq("status", "pending"));
+  },
+
+  async listClassTypes() {
+    return (check(await db().from("class_types").select("*").order("sort")) as Row[]).map(toClassType);
+  },
+  async updateClassType(id, patch) {
+    const row: Row = {};
+    if (patch.priceCents !== undefined) row.price_cents = patch.priceCents;
+    if (patch.visible !== undefined) row.visible = patch.visible;
+    if (patch.minGuests !== undefined) row.min_guests = patch.minGuests;
+    if (patch.description !== undefined) row.description = patch.description;
+    if (Object.keys(row).length) check(await db().from("class_types").update(row).eq("id", id));
+  },
+  async listSessions(opts) {
+    let q = db().from("class_sessions").select("*").order("date").order("start_time").limit(1000);
+    if (!opts?.includeCancelled) q = q.eq("status", "scheduled");
+    if (opts?.fromDate) q = q.gte("date", opts.fromDate);
+    return (check(await q) as Row[]).map(toSession);
+  },
+  async getSession(id) {
+    const row = check(await db().from("class_sessions").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toSession(row) : null;
+  },
+  async createSession(x) {
+    const row = check(
+      await db()
+        .from("class_sessions")
+        .insert({ id: x.id, class_type_id: x.classTypeId, date: x.date, start_time: x.startTime, seats: x.seats, status: x.status, series_id: x.seriesId })
+        .select("*")
+        .single(),
+    ) as Row;
+    return toSession(row);
+  },
+  async updateSession(id, patch) {
+    const row: Row = {};
+    if (patch.date !== undefined) row.date = patch.date;
+    if (patch.startTime !== undefined) row.start_time = patch.startTime;
+    if (patch.seats !== undefined) row.seats = patch.seats;
+    if (patch.status !== undefined) row.status = patch.status;
+    if (Object.keys(row).length) check(await db().from("class_sessions").update(row).eq("id", id));
+  },
+  async reserveSeats(sessionId, seats) {
+    return check(await db().rpc("reserve_class_seats", { p_session_id: sessionId, p_seats: seats })) as boolean;
+  },
+  async releaseSeats(sessionId, seats) {
+    check(await db().rpc("release_class_seats", { p_session_id: sessionId, p_seats: seats }));
+  },
+  async createBooking(b) {
+    const row = check(
+      await db()
+        .from("class_bookings")
+        .insert({
+          id: b.id,
+          reference: b.reference,
+          token_hash: b.tokenHash,
+          session_id: b.sessionId,
+          seats: b.seats,
+          guests: b.guests,
+          contact_name: b.contactName,
+          email: b.email,
+          phone: b.phone,
+          unit_price_cents: b.unitPriceCents,
+          discount_cents: b.discountCents,
+          total_cents: b.totalCents,
+          adult_confirmed: b.adultConfirmed,
+          marketing_opt_in: b.marketingOptIn,
+          waitlist_id: b.waitlistId,
+          terms_accepted_at: b.termsAcceptedAt,
+        })
+        .select("*")
+        .single(),
+    ) as Row;
+    return toBooking(row);
+  },
+  async getBookingById(id) {
+    const row = check(await db().from("class_bookings").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toBooking(row) : null;
+  },
+  async getBookingByTokenHash(tokenHash) {
+    const row = check(await db().from("class_bookings").select("*").eq("token_hash", tokenHash).maybeSingle()) as Row | null;
+    return row ? toBooking(row) : null;
+  },
+  async listBookings(opts) {
+    let q = db().from("class_bookings").select("*").order("created_at").limit(2000);
+    if (opts?.sessionId) q = q.eq("session_id", opts.sessionId);
+    if (!opts?.includeUnpaid) q = q.neq("status", "awaiting_payment");
+    return (check(await q) as Row[]).map(toBooking);
+  },
+  async listStaleUnpaidBookings(before) {
+    const rows = check(await db().from("class_bookings").select("*").eq("status", "awaiting_payment").lt("created_at", before).limit(200)) as Row[];
+    return rows.map(toBooking);
+  },
+  async updateBookingGuests(id, guests) {
+    check(await db().from("class_bookings").update({ guests }).eq("id", id));
+  },
+  async cancelBookingOnce(id, onlyUnpaid, record) {
+    return check(await db().rpc("cancel_class_booking", { p_booking_id: id, p_only_unpaid: onlyUnpaid, p_record: record })) as boolean;
+  },
+  async claimBookingMessage(bookingId, key) {
+    const { error } = await db().from("booking_message_log").insert({ booking_id: bookingId, key });
+    if (!error) return true;
+    if (isUniqueViolation(error)) return false;
+    throw new Error(`Database error: ${error.message}`);
+  },
+  async releaseBookingMessage(bookingId, key) {
+    check(await db().from("booking_message_log").delete().eq("booking_id", bookingId).eq("key", key));
+  },
+  async createPrivateRequest(r) {
+    const row = check(
+      await db()
+        .from("private_requests")
+        .insert({
+          id: r.id,
+          reference: r.reference,
+          package_key: r.packageKey,
+          package_name: r.packageName,
+          guests: r.guests,
+          per_person_cents: r.perPersonCents,
+          deposit_cents: r.depositCents,
+          estimate_cents: r.estimateCents,
+          preferred_date: r.preferredDate,
+          preferred_time: r.preferredTime,
+          occasion: r.occasion,
+          contact_name: r.contactName,
+          email: r.email,
+          phone: r.phone,
+          notes: r.notes,
+        })
+        .select("*")
+        .single(),
+    ) as Row;
+    return toPrivate(row);
+  },
+  async getPrivateRequest(id) {
+    const row = check(await db().from("private_requests").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toPrivate(row) : null;
+  },
+  async getPrivateRequestByPayHash(hash) {
+    const row = check(await db().from("private_requests").select("*").eq("pay_token_hash", hash).maybeSingle()) as Row | null;
+    return row ? toPrivate(row) : null;
+  },
+  async listPrivateRequests() {
+    return (check(await db().from("private_requests").select("*").order("created_at", { ascending: false }).limit(500)) as Row[]).map(toPrivate);
+  },
+  async setPrivateStatus(id, status, from, payTokenHash) {
+    const row: Row = { status };
+    if (payTokenHash) row.pay_token_hash = payTokenHash;
+    const rows = check(await db().from("private_requests").update(row).eq("id", id).eq("status", from).select("id")) as Row[];
+    return rows.length === 1;
+  },
+
+  async salesSummary(from, to) {
+    const data = check(await db().rpc("sales_summary", { p_from: from, p_to: to })) as Omit<SalesSummary, "averageCents">;
+    return { ...data, averageCents: data.orders ? Math.round(data.revenueCents / data.orders) : 0 };
+  },
 };
 
 function toPayment(r: Row): Payment {
@@ -724,6 +1190,9 @@ function toPayment(r: Row): Payment {
     orderId: (r.order_id as string | null) ?? null,
     boxOrderId: (r.box_order_id as string | null) ?? null,
     voucherId: (r.voucher_id as string | null) ?? null,
+    corporateOrderId: (r.corporate_order_id as string | null) ?? null,
+    classBookingId: (r.class_booking_id as string | null) ?? null,
+    privateRequestId: (r.private_request_id as string | null) ?? null,
     kind: r.kind as Payment["kind"],
     amountCents: r.amount_cents as number,
     stripeSessionId: r.stripe_session_id as string,

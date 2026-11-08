@@ -13,6 +13,9 @@ export const AUTOMATION_INFO: Record<AutomationKey, { label: string; help: strin
   pickup_details: { label: "Pickup details", help: "Pickup address, parking and cake care.", daysLabel: "days before pickup" },
   thank_you: { label: "Thank you and review request", help: "Sent after collection, with the review link.", daysLabel: "days after pickup" },
   rebook_reminder: { label: "Birthday reminder for next year", help: "Only for birthday orders where the customer asked for it.", daysLabel: "days after pickup" },
+  stand_return: { label: "Cake stand return reminder", help: "Only for orders that hired a stand (with a bond).", daysLabel: "days after pickup" },
+  class_reminder: { label: "Class reminder", help: "What to bring, start time and parking, for class guests.", daysLabel: "days before the class" },
+  class_thank_you: { label: "Class thank you and review request", help: "Sent to class bookers after the class.", daysLabel: "days after the class" },
 };
 
 export const DEFAULT_AUTOMATIONS: Automation[] = [
@@ -23,7 +26,15 @@ export const DEFAULT_AUTOMATIONS: Automation[] = [
   { key: "thank_you", enabled: true, days: 1 },
   // About 11 months after pickup, so there is time to book the next birthday cake.
   { key: "rebook_reminder", enabled: true, days: 335 },
+  { key: "stand_return", enabled: true, days: 3 },
+  { key: "class_reminder", enabled: true, days: 1 },
+  { key: "class_thank_you", enabled: true, days: 1 },
 ];
+
+/** Did this order hire something with a bond (a cake stand)? */
+export function hasBond(order: Pick<Order, "items">): boolean {
+  return order.items.some((i) => i.category === "bond" && i.amountCents > 0);
+}
 
 /** Occasions that count as birthdays for the "remind me next year" option. */
 export const BIRTHDAY_OCCASIONS = ["occ-birthday", "occ-first-birthday"];
@@ -41,7 +52,8 @@ export function automationMap(list: Automation[]): Record<AutomationKey, Automat
 type MsgOrder = Pick<
   Order,
   "stage" | "pickupDate" | "createdAt" | "totalCents" | "amountPaidCents" | "voucherAppliedCents" | "config" | "remindNextYear" | "approvedAt"
->;
+> &
+  Partial<Pick<Order, "items">>;
 
 /** Scheduled daily messages that are due today and not yet sent. */
 export function dueScheduledMessages(order: MsgOrder, automations: Automation[], sent: string[], today: string): AutomationKey[] {
@@ -61,6 +73,7 @@ export function dueScheduledMessages(order: MsgOrder, automations: Automation[],
     const after = -daysOut;
     if (ok("thank_you") && after >= a.thank_you.days) due.push("thank_you");
     if (ok("rebook_reminder") && order.remindNextYear && isBirthday(order) && after >= a.rebook_reminder.days) due.push("rebook_reminder");
+    if (ok("stand_return") && hasBond({ items: order.items ?? [] }) && after >= a.stand_return.days) due.push("stand_return");
   }
   return due;
 }
@@ -97,6 +110,9 @@ export function messageTimeline(order: MsgOrder, automations: Automation[], sent
   ];
   if (isBirthday(order)) {
     list.push(entry("rebook_reminder", addDays(order.pickupDate, a.rebook_reminder.days), order.remindNextYear));
+  }
+  if (hasBond({ items: order.items ?? [] })) {
+    list.push(entry("stand_return", addDays(order.pickupDate, a.stand_return.days)));
   }
   return list;
 }
