@@ -15,6 +15,7 @@ import type {
   ClassSession,
   ClassType,
   PartialCancellation,
+  GuestReduction,
   PrivateGuest,
   CorporateOrder,
   Order,
@@ -693,6 +694,41 @@ export function privateCancelledEmail(r: PrivateRequest, summary: string): Email
     to: r.email,
     subject: `Private class cancelled: ${formatDateLong(r.preferredDate)}`,
     ...render([`Hi ${r.contactName.split(" ")[0]}, your private ${r.packageName} class on ${formatDateLong(r.preferredDate)} has been cancelled.`, summary]),
+  };
+}
+
+export function guestsReducedEmail(r: PrivateRequest, rec: GuestReduction, organiserUrl: string): Email {
+  return {
+    to: r.email,
+    subject: `Guest numbers updated: ${rec.to} guests on ${formatDateLong(r.preferredDate)}`,
+    ...render(
+      [`Hi ${r.contactName.split(" ")[0]}, your private ${r.packageName} class on ${formatDateLong(r.preferredDate)} is now for ${rec.to} guests.`, rec.summary],
+      { href: organiserUrl, label: "See your guests" },
+    ),
+  };
+}
+
+export function guestRemovedEmail(r: PrivateRequest, to: string, name: string, outcome: string): Email {
+  return {
+    to,
+    subject: `Your place in the private class on ${formatDateLong(r.preferredDate)}`,
+    ...render([`Hi ${name.split(" ")[0] || "there"}, the guest numbers for the private ${r.packageName} class on ${formatDateLong(r.preferredDate)} have been lowered, so your place has been cancelled.`, outcome]),
+  };
+}
+
+export function guestsReducedAlertEmail(r: PrivateRequest, rec: GuestReduction, to: string): Email {
+  const manual = rec.refundCents - (rec.autoRefundedCents ?? 0);
+  return {
+    to,
+    subject: `Guest numbers lowered: ${r.reference}${manual > 0 ? ` (refund ${formatAud(manual)} in Stripe)` : ""}`,
+    ...render(
+      [
+        `${rec.by === "emily" ? "You" : r.contactName} lowered the private ${r.packageName} class on ${formatDateLong(r.preferredDate)} from ${rec.from} to ${rec.to} guests.`,
+        rec.summary,
+        (rec.autoRefundedCents ?? 0) > 0 ? `${formatAud(rec.autoRefundedCents!)} was refunded through Stripe automatically.` : "",
+        manual > 0 ? `ACTION: refund ${formatAud(manual)} in the Stripe dashboard.` : "",
+      ].filter(Boolean),
+    ),
   };
 }
 

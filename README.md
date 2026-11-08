@@ -234,6 +234,15 @@ It refuses to run unless the key starts with `sk_test_` and `SMOKE_CONFIRM=yes`.
 
 **New setting:** guests can change their details until 2 days before the class (`guestEditCutoffDays`). **New migration:** `supabase/migrations/20261112000000_phase5.sql`. Run it in the Supabase SQL editor after the phase 4 one.
 
+## After phase 5: fewer private guests, draft terms, photo opt-out
+
+- **Fewer guests for a private class.** After the deposit, Emily can lower the guest numbers from **Classes, Private class requests, Fewer guests** at any time before the class. The organiser can do it from their page until the shares are due, but only by removing places that haven't been paid. Empty places go first, then guests who added details but haven't paid. Only Emily can remove paid places: what they paid by card is refunded, turned into credit or kept under the class terms (`classFullRefundDays`, `classCreditDays`), or refunded in full if she ticks "Refund paid places in full". Vouchers used on removed places always come back; class pass credits come back unless it's inside the no-refund window. The new total is the new number of guests times the package price; the deposit stays, and the places still to pay share what's left. If the deposit plus paid places is more than the new total, the organiser gets the difference back under the same terms. It never goes below the package minimum, and it waits if a guest is paying at that moment. Everyone affected is emailed, and the change is recorded on the request (with any Stripe refund ids).
+- **Partial seat cancellations** now save the automatic Stripe refund ids on their record, and the admin class page shows them (or "Refund $X by hand in Stripe").
+- **Draft terms and privacy pages.** `/terms` and `/privacy` hold Emily's draft wording. Every number that has a setting (deposit, balance due, notice, rush fee, free change rounds, change cut-off, cancellation windows, admin fee, credit and voucher expiry, class pass, class terms, private deposits, shares due, the class minimum) is filled in live from the settings, so the pages always match how the site behaves. Anything still in [square brackets] (ABN, email, GST, delivery, how long records are kept, the date) is highlighted for Emily to fill in. Both pages show "Draft for review. Not legal advice." until she unticks it in **Settings** (`legalDraftBanner`). Have the wording checked before launch.
+- **Photo opt-out.** Checkout has an optional "Please don't photograph or post my cake online" tick. It's saved on the order, shown on the order page in the admin, and printed as **NO PHOTOS** on the kitchen sheet.
+
+**New setting:** `legalDraftBanner` (default on). **New migration:** `supabase/migrations/20261113000000_gaps.sql`. Run it after the phase 5 one, then re-run `seed.sql`.
+
 ## First live test
 
 Do this in **Stripe test mode** before switching to live payments.
@@ -259,8 +268,6 @@ Do this in **Stripe test mode** before switching to live payments.
 
 Not built yet, on purpose:
 
-- Partial cancellation of private classes (fewer guests after the deposit).
-- Saving the automatic refund id onto a partial seat cancellation record (it is kept in the refunds table and shown in Stripe).
 - Running the live smoke test unattended: Stripe Checkout has to be paid by a person.
 
 ## For developers

@@ -68,12 +68,20 @@ export default async function PrivatePayPage({ params, searchParams }: PageProps
                 </li>
               ))}
             </ul>
+            {(r.guestReductions ?? []).map((g) => (
+              <p key={g.at} className="mt-3 rounded-lg bg-blush px-3 py-2" data-testid="organiser-reduction">
+                {g.summary}
+              </p>
+            ))}
             <OrganiserActions
               token={token}
               canNudge={canNudge(r.lastNudgeAt, new Date()) && guests.some((g) => g.status === "open" && g.email)}
               canPayRest={organiserCanPayRest(today, due, progress)}
               restLabel={formatAud(progress.owingCents)}
               dueLabel={formatDateLong(due)}
+              guests={r.guests}
+              minGuests={settings.privatePackages.find((p) => p.key === r.packageKey)?.minGuests ?? 1}
+              canReduce={today < due && guests.some((g) => g.status === "open")}
             />
           </section>
         )}

@@ -4,7 +4,7 @@
 // Anything Stripe refuses falls back to the manual record and an email.
 
 import { allocateRefund, refundKey } from "../domain/refunds";
-import type { RefundTargetKind } from "../domain/types";
+import type { Payment, RefundTargetKind } from "../domain/types";
 import { formatAud } from "../domain/money";
 import { adminEmail, type LightDeps } from "./common";
 import { refundFailedEmail, sendSafely } from "./email";
@@ -19,12 +19,23 @@ export interface RefundResult {
 }
 
 export async function refundTarget(deps: LightDeps, kind: RefundTargetKind, id: string, amountCents: number, reason: string, label: string): Promise<RefundResult> {
+  return refundFromPayments(deps, () => deps.repo.listPaidPayments(kind, id), amountCents, reason, label);
+}
+
+/** Like refundTarget, but against a chosen set of payments (for example one guest's share). */
+export async function refundFromPayments(
+  deps: LightDeps,
+  load: () => Promise<Payment[]>,
+  amountCents: number,
+  reason: string,
+  label: string,
+): Promise<RefundResult> {
   const none = { auto: false, refundedCents: 0, manualCents: Math.max(0, amountCents), refundIds: [] };
   if (amountCents <= 0) return { ...none, manualCents: 0 };
   const settings = await deps.repo.getSettings();
   if (!settings.autoRefunds || !deps.payments) return none;
 
-  const payments = await deps.repo.listPaidPayments(kind, id);
+  const payments = await load();
   const { slices, unallocated } = allocateRefund(
     payments.map((p) => ({ id: p.id, amountCents: p.amountCents, refundedCents: p.refundedCents ?? 0, createdAt: p.createdAt })),
     amountCents,

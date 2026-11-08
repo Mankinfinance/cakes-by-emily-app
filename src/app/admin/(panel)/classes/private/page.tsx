@@ -8,6 +8,7 @@ import { DIETARY_FILTERS } from "@/lib/domain/types";
 import { refundButtonLabel } from "@/lib/services/refunds";
 import { cancelPrivateAction, privateAction } from "../../actions";
 import { ActionButton } from "../../ActionButton";
+import { ReduceGuests } from "./ReduceGuests";
 
 const STATUS = { requested: "New request", accepted: "Accepted (deposit link sent)", declined: "Declined", paid: "Deposit paid", cancelled: "Cancelled" } as const;
 
@@ -55,6 +56,17 @@ export default async function PrivateRequestsAdmin() {
                     Estimate {formatAud(r.estimateCents)}, deposit {formatAud(r.depositCents)}. Paid so far {formatAud(paidCents)}.
                   </p>
                   {r.cancellation && <p className="mt-1">{r.cancellation.summary}</p>}
+                  {(r.guestReductions ?? []).map((g) => (
+                    <p key={g.at} className="mt-1" data-testid="reduction-record">
+                      {g.summary}
+                      {(g.autoRefundedCents ?? 0) > 0 && (
+                        <span className="text-muted">
+                          {" "}
+                          Refunded through Stripe: {formatAud(g.autoRefundedCents!)} ({(g.refundIds ?? []).join(", ")}).
+                        </span>
+                      )}
+                    </p>
+                  ))}
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <span className="font-semibold" data-testid="private-status">
@@ -68,6 +80,14 @@ export default async function PrivateRequestsAdmin() {
                   )}
                   {(r.status === "accepted" || r.status === "paid") && (
                     <ActionButton action={cancelPrivateAction.bind(null, r.id)} label={cancel.label} confirmText={cancel.confirm} testId="private-cancel" />
+                  )}
+                  {r.status === "paid" && guests.length > 0 && (
+                    <ReduceGuests
+                      id={r.id}
+                      current={r.guests}
+                      min={settings.privatePackages.find((p) => p.key === r.packageKey)?.minGuests ?? 1}
+                      autoRefunds={settings.autoRefunds}
+                    />
                   )}
                 </div>
               </div>
