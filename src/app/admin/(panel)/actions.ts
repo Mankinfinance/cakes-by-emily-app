@@ -146,6 +146,7 @@ export async function addItemAction(input: unknown): Promise<ActionResult> {
       allergens: [],
       visible: false,
       sort: Math.max(0, ...all.map((i) => i.sort)) + 10,
+      bondCents: 0,
     });
     revalidatePath("/admin/catalogue");
     return { ok: true };

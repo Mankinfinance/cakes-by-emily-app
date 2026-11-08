@@ -17,6 +17,7 @@ export const cakeConfigSchema = z.object({
   colour: id,
   decorations: z.array(id).max(20),
   extras: z.array(id).max(20),
+  addons: z.array(id).max(20).default([]),
   topperText: z.string().max(30).default(""),
 });
 
@@ -75,6 +76,30 @@ export const settingsSchema = z
     voucherCustomMinCents: z.number().int().min(500).max(100_000),
     voucherCustomMaxCents: z.number().int().min(500).max(100_000),
     reviewUrl: z.union([z.literal(""), z.string().trim().url().max(500).refine((u) => u.startsWith("https://"), "Use an https:// link")]),
+    referralsEnabled: z.boolean(),
+    referralGiveCents: z.number().int().min(0).max(20_000),
+    referralGetCents: z.number().int().min(0).max(20_000),
+    stampsEnabled: z.boolean(),
+    stampEvery: z.number().int().min(2).max(50),
+    stampRewardName: z.string().trim().min(1).max(80),
+    groupDiscountMinSeats: z.number().int().min(2).max(20),
+    groupDiscountPercent: z.number().int().min(0).max(50),
+    classBlocksCakes: z.boolean(),
+    privatePackages: z
+      .array(
+        z.object({
+          key: z.string().regex(/^[a-z0-9-]{1,30}$/),
+          name: z.string().trim().min(1).max(60),
+          includes: z.string().trim().max(200),
+          perPersonCents: z.number().int().min(0).max(100_000),
+          depositCents: z.number().int().min(0).max(100_000),
+          minGuests: z.number().int().min(1).max(50),
+          maxGuests: z.number().int().min(1).max(50),
+          kids: z.boolean(),
+          visible: z.boolean(),
+        }),
+      )
+      .max(10),
   })
   .refine((s) => s.cancelCreditDays <= s.cancelFullRefundDays, {
     message: "The credit window must start on or before the full refund window",
@@ -96,6 +121,7 @@ export const catalogueItemPatchSchema = z.object({
   allergens: z.array(z.enum(ALLERGENS)).optional(),
   visible: z.boolean().optional(),
   sort: z.number().int().min(0).max(100000).optional(),
+  bondCents: cents.optional(),
 });
 
 export const newCatalogueItemSchema = z.object({

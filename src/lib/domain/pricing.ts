@@ -14,6 +14,10 @@ export interface PriceOptions {
   isRush: boolean;
   peakSurchargeCents: number;
   peakLabel?: string;
+  /** A referral discount for a new customer (phase 3). */
+  referralDiscountCents?: number;
+  /** A stamp card reward to add as a free line (phase 3). */
+  stampRewardName?: string;
 }
 
 export class PricingError extends Error {}
@@ -63,6 +67,16 @@ export function priceCake(
     if (item.category !== "extra") throw new PricingError("Unknown extra.");
     add(item);
   }
+  let bondCents = 0;
+  for (const id of config.addons ?? []) {
+    const item = need(id, "add-on");
+    if (item.category !== "addon") throw new PricingError("Unknown add-on.");
+    add(item);
+    bondCents += item.bondCents;
+  }
+  if (opts.stampRewardName) {
+    lines.push({ itemId: null, category: "reward", name: `Stamp card reward: ${opts.stampRewardName}`, amountCents: 0 });
+  }
 
   const subtotalCents = lines.reduce((sum, l) => sum + l.amountCents, 0);
   const rushFeeCents = opts.isRush ? settings.rushFeeCents : 0;
@@ -78,7 +92,15 @@ export function priceCake(
       amountCents: peakSurchargeCents,
     });
   }
-  const totalCents = subtotalCents + rushFeeCents + peakSurchargeCents;
+  if (bondCents) {
+    lines.push({ itemId: null, category: "bond", name: "Refundable bond (stand hire)", amountCents: bondCents });
+  }
+  const beforeDiscount = subtotalCents + rushFeeCents + peakSurchargeCents + bondCents;
+  const referralDiscountCents = Math.min(beforeDiscount, Math.max(0, opts.referralDiscountCents ?? 0));
+  if (referralDiscountCents) {
+    lines.push({ itemId: null, category: "referral", name: "Referral discount", amountCents: -referralDiscountCents });
+  }
+  const totalCents = beforeDiscount - referralDiscountCents;
   // Rush orders are paid in full; otherwise a deposit secures the date.
   const depositCents = opts.isRush
     ? totalCents
@@ -89,6 +111,8 @@ export function priceCake(
     subtotalCents,
     rushFeeCents,
     peakSurchargeCents,
+    bondCents,
+    referralDiscountCents,
     totalCents,
     depositCents,
     isRush: opts.isRush,

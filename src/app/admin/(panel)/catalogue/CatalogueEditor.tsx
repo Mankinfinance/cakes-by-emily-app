@@ -13,6 +13,7 @@ const TITLES: Record<Category, string> = {
   colour: "Colours",
   decoration: "Decorations",
   extra: "Extras",
+  addon: "Party add-ons (offered at checkout)",
 };
 
 function toCents(dollars: string): number | null {
