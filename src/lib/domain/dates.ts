@@ -29,6 +29,15 @@ export function addDays(date: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Same day of the month, `months` later (clamped to the month's last day). */
+export function addMonths(date: string, months: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + months, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d, last));
+  return target.toISOString().slice(0, 10);
+}
+
 /** Whole days from `from` to `to` (positive when `to` is later). */
 export function daysBetween(from: string, to: string): number {
   const a = Date.parse(`${from}T00:00:00Z`);

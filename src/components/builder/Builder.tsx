@@ -5,7 +5,9 @@ import { CakePreview } from "@/components/CakePreview";
 import { compressImage } from "@/lib/client/image";
 import { formatDateLong, formatTime12 } from "@/lib/domain/dates";
 import { formatAud } from "@/lib/domain/money";
-import { priceCake } from "@/lib/domain/pricing";
+import { BIRTHDAY_OCCASIONS } from "@/lib/domain/automations";
+import { dueAtCheckout, priceCake } from "@/lib/domain/pricing";
+import { termsLines } from "@/lib/domain/terms";
 import {
   DIETARY_FILTERS,
   type CakeConfig,
@@ -33,6 +35,7 @@ interface Details {
   allergyNotes: string;
   notes: string;
   marketingOptIn: boolean;
+  remindNextYear: boolean;
 }
 
 interface Draft {
@@ -42,7 +45,7 @@ interface Draft {
 }
 
 const DRAFT_KEY = "cbe-order-draft";
-const emptyDetails: Details = { customerName: "", email: "", phone: "", allergyNotes: "", notes: "", marketingOptIn: false };
+const emptyDetails: Details = { customerName: "", email: "", phone: "", allergyNotes: "", notes: "", marketingOptIn: false, remindNextYear: false };
 
 function loadDraft(): Draft | null {
   try {
@@ -66,6 +69,11 @@ export function Builder({ items, settings, today, cancelled }: Props) {
   const [acceptTerms, setAcceptTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fullDate, setFullDate] = useState<string | null>(null);
+  const [wl, setWl] = useState({ busy: false, msg: "", ok: false });
+  const [code, setCode] = useState("");
+  const [codeState, setCodeState] = useState<{ applied: string; balanceCents: number } | null>(null);
+  const [codeMsg, setCodeMsg] = useState<string | null>(null);
   const topRef = useRef<HTMLDivElement>(null);
 
   // Restore a saved draft (for example after cancelling at checkout).
@@ -124,6 +132,40 @@ export function Builder({ items, settings, today, cancelled }: Props) {
     topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  const isBirthday = BIRTHDAY_OCCASIONS.includes(config.occasion);
+  const voucherOff = price && codeState ? Math.min(codeState.balanceCents, price.totalCents) : 0;
+  const payNow = price ? dueAtCheckout(price.depositCents, voucherOff) : 0;
+
+  async function applyCode() {
+    setCodeMsg(null);
+    setCodeState(null);
+    try {
+      const res = await fetch("/api/vouchers/check", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; balanceCents?: number; error?: string };
+      if (!res.ok || !data.ok) throw new Error(data.error ?? "That code wasn't recognised.");
+      setCodeState({ applied: code.trim(), balanceCents: data.balanceCents ?? 0 });
+    } catch (e) {
+      setCodeMsg(e instanceof Error ? e.message : "That code wasn't recognised.");
+    }
+  }
+
+  async function joinWaitlist() {
+    if (!fullDate) return;
+    setWl({ busy: true, msg: "", ok: false });
+    try {
+      const res = await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ date: fullDate, config, dietary, customerName: details.customerName, email: details.email, phone: details.phone }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { place?: number; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Could not join the waitlist.");
+      setWl({ busy: false, ok: true, msg: `You're number ${data.place} on the waitlist for ${formatDateLong(fullDate)}. We've emailed you, and if a spot opens you'll get a link to claim it.` });
+    } catch (e) {
+      setWl({ busy: false, ok: false, msg: e instanceof Error ? e.message : "Could not join the waitlist." });
+    }
+  }
+
   const detailsValid =
     details.customerName.trim().length >= 2 && /^\S+@\S+\.\S+$/.test(details.email) && /^[0-9 +()-]{8,20}$/.test(details.phone.trim());
   const canNext = step === 6 ? Boolean(day && slot) : step === 7 ? detailsValid : true;
@@ -151,7 +193,16 @@ export function Builder({ items, settings, today, cancelled }: Props) {
       const form = new FormData();
       form.set(
         "payload",
-        JSON.stringify({ config, dietary, pickupDate: day.date, pickupSlot: slot, ...details, acceptTerms }),
+        JSON.stringify({
+          config,
+          dietary,
+          pickupDate: day.date,
+          pickupSlot: slot,
+          ...details,
+          remindNextYear: isBirthday && details.remindNextYear,
+          voucherCode: codeState?.applied ?? "",
+          acceptTerms,
+        }),
       );
       if (photo) form.set("inspiration", photo, photoName || "inspiration.jpg");
       const res = await fetch("/api/orders", { method: "POST", body: form });
@@ -296,8 +347,39 @@ export function Builder({ items, settings, today, cancelled }: Props) {
               onSelectDay={(d) => {
                 setDay(d);
                 setSlot("");
+                setFullDate(null);
               }}
               onSelectSlot={setSlot}
+              fullDate={fullDate}
+              onSelectFull={(date) => {
+                setFullDate(date);
+                setDay(null);
+                setSlot("");
+                setWl({ busy: false, msg: "", ok: false });
+              }}
+              waitlist={
+                <div className="card mt-5 p-4" data-testid="waitlist-panel">
+                  <h3 className="font-semibold">{fullDate ? formatDateLong(fullDate) : ""} is fully booked</h3>
+                  <p className="mt-1 text-sm text-muted">Join the waitlist with your cake design. If a spot opens, you&apos;ll get an email with 24 hours to claim it.</p>
+                  {!wl.ok && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                      <input className="field" placeholder="Your name" aria-label="Waitlist name" value={details.customerName} onChange={(e) => setDetails({ ...details, customerName: e.target.value })} />
+                      <input className="field" type="email" placeholder="Email" aria-label="Waitlist email" value={details.email} onChange={(e) => setDetails({ ...details, email: e.target.value })} />
+                      <input className="field" type="tel" placeholder="Mobile" aria-label="Waitlist mobile" value={details.phone} onChange={(e) => setDetails({ ...details, phone: e.target.value })} />
+                    </div>
+                  )}
+                  {!wl.ok && (
+                    <button type="button" className="btn btn-primary mt-3" disabled={wl.busy || !detailsValid} onClick={joinWaitlist} data-testid="join-waitlist">
+                      Join the waitlist
+                    </button>
+                  )}
+                  {wl.msg && (
+                    <p role={wl.ok ? "status" : "alert"} className={`mt-3 text-sm ${wl.ok ? "" : "text-rose-dark"}`} data-testid="waitlist-msg">
+                      {wl.msg}
+                    </p>
+                  )}
+                </div>
+              }
             />
           )}
           {step === 7 && (
@@ -341,6 +423,12 @@ export function Builder({ items, settings, today, cancelled }: Props) {
                 <input id="photo" type="file" accept="image/*" onChange={onPhoto} className="block w-full text-sm" />
                 {photoName && <p className="mt-1 text-xs text-muted">Added: {photoName}</p>}
               </div>
+              {isBirthday && (
+                <label className="flex items-start gap-2 text-sm">
+                  <input type="checkbox" className="mt-1" checked={details.remindNextYear} onChange={(e) => setDetails({ ...details, remindNextYear: e.target.checked })} data-testid="remind-next-year" />
+                  <span>Remind me before next year&apos;s birthday, so I can book early.</span>
+                </label>
+              )}
               <label className="flex items-start gap-2 text-sm">
                 <input type="checkbox" className="mt-1" checked={details.marketingOptIn} onChange={(e) => setDetails({ ...details, marketingOptIn: e.target.checked })} />
                 <span>Send me the occasional email about seasonal treats and offers. (Optional, unsubscribe any time.)</span>
@@ -365,8 +453,29 @@ export function Builder({ items, settings, today, cancelled }: Props) {
                 {config.topperText && config.decorations.includes("dec-topper") && <p className="mt-1 text-sm">Topper: {config.topperText}</p>}
               </div>
               <div className="card p-5 text-sm">
+                <h3 className="font-semibold">Gift voucher or credit code</h3>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <input className="field max-w-xs flex-1 uppercase" placeholder="XXXX-XXXX-XXXX-XXXX" aria-label="Voucher code" value={code} onChange={(e) => { setCode(e.target.value); setCodeState(null); }} data-testid="voucher-code" />
+                  <button type="button" className="btn btn-ghost" disabled={code.trim().length < 16} onClick={applyCode} data-testid="apply-code">
+                    Apply
+                  </button>
+                </div>
+                {codeState && price && (
+                  <p className="mt-2" role="status" data-testid="code-applied">
+                    {formatAud(voucherOff)} will come off your order.
+                    {payNow === 0 ? " Nothing more to pay today." : ` You'll pay ${formatAud(payNow)} today.`}
+                  </p>
+                )}
+                {codeMsg && <p className="mt-2 text-rose-dark" role="alert" data-testid="code-error">{codeMsg}</p>}
+              </div>
+              <div className="card p-5 text-sm">
                 <h3 className="font-semibold">Terms</h3>
-                <p className="mt-1 whitespace-pre-line text-muted">{settings.cancellationPolicy}</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5 text-muted" data-testid="terms-lines">
+                  {termsLines(settings).map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                </ul>
+                {settings.cancellationPolicy && <p className="mt-2 whitespace-pre-line text-muted">{settings.cancellationPolicy}</p>}
                 <label className="mt-3 flex items-start gap-2">
                   <input type="checkbox" className="mt-1" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} data-testid="accept-terms" />
                   <span>
@@ -401,7 +510,11 @@ export function Builder({ items, settings, today, cancelled }: Props) {
               </button>
             ) : (
               <button type="button" className="btn btn-primary" onClick={submit} disabled={!acceptTerms || submitting || !price} data-testid="pay">
-                {submitting ? "Opening secure checkout..." : `Pay ${price?.isRush ? "in full" : "deposit"} ${price ? formatAud(price.depositCents) : ""}`}
+                {submitting
+                  ? "Opening secure checkout..."
+                  : price && codeState && payNow === 0
+                    ? "Place order"
+                    : `Pay ${price?.isRush ? "in full" : "deposit"} ${price ? formatAud(payNow) : ""}`}
               </button>
             )}
           </div>

@@ -2,7 +2,7 @@
 // concept demo. Emily replaces them with her real prices in /admin.
 // Relative imports only: this file is also read by scripts/seed-sql.ts.
 
-import type { CatalogueItem, Settings } from "../domain/types";
+import type { Automation, CatalogueItem, SeasonalBox, Settings } from "../domain/types";
 
 type Seed = Omit<CatalogueItem, "visible" | "sort" | "hex" | "tiers" | "priceMode" | "description"> &
   Partial<Pick<CatalogueItem, "hex" | "tiers" | "priceMode" | "description">>;
@@ -82,9 +82,82 @@ export const SAMPLE_SETTINGS: Settings = {
   changeCutoffDays: 7,
   closedWeekdays: [1],
   bookingHorizonDays: 180,
-  cancellationPolicy:
-    "[Emily to confirm] Deposits secure your date. Cancellations 14 or more days before pickup get the deposit back minus a $20 admin fee. Inside 14 days the deposit is not refundable. Rush and peak fees are not refundable.",
+  cancellationPolicy: "[Emily to confirm these terms before launch.]",
+  freeDesignChangeRounds: 1,
+  freeDateChanges: 1,
+  cancelFullRefundDays: 14,
+  cancelAdminFeeCents: 2000,
+  cancelCreditDays: 7,
+  voucherValidMonths: 12,
+  voucherOptions: [
+    { cents: 5000, visible: true },
+    { cents: 10000, visible: true },
+    { cents: 15000, visible: true },
+    { cents: 20000, visible: true },
+  ],
+  voucherCustomEnabled: true,
+  voucherCustomMinCents: 2000,
+  voucherCustomMaxCents: 50000,
+  reviewUrl: "",
 };
+
+export const SAMPLE_AUTOMATIONS: Automation[] = [
+  { key: "order_received", enabled: true, days: 0 },
+  { key: "design_confirmed", enabled: true, days: 0 },
+  { key: "balance_reminder", enabled: true, days: 4 },
+  { key: "pickup_details", enabled: true, days: 1 },
+  { key: "thank_you", enabled: true, days: 1 },
+  { key: "rebook_reminder", enabled: true, days: 335 },
+];
+
+/** SAMPLE seasonal boxes. Prices, caps and dates are placeholders for Emily to change. */
+export const SAMPLE_BOXES: SeasonalBox[] = [
+  {
+    id: "b0000000-0000-4000-8000-000000000001",
+    name: "Christmas cookie box",
+    description: "12 hand-iced Christmas cookies in a gift box. [Sample]",
+    priceCents: 4500,
+    cap: 40,
+    sold: 0,
+    opensOn: "2026-11-01",
+    closesOn: "2026-12-14",
+    pickupFrom: "2026-12-18",
+    pickupTo: "2026-12-23",
+    photoPath: null,
+    visible: true,
+    sort: 10,
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000002",
+    name: "Teacher gift box",
+    description: "6 iced cookies and a thank-you tag for the end of the school year. [Sample]",
+    priceCents: 3800,
+    cap: 30,
+    sold: 0,
+    opensOn: "2026-11-01",
+    closesOn: "2026-12-07",
+    pickupFrom: "2026-12-10",
+    pickupTo: "2026-12-17",
+    photoPath: null,
+    visible: true,
+    sort: 20,
+  },
+  {
+    id: "b0000000-0000-4000-8000-000000000003",
+    name: "Mother's Day box",
+    description: "Cupcakes, cookies and a mini cake for Mum. [Sample]",
+    priceCents: 6500,
+    cap: 25,
+    sold: 0,
+    opensOn: "2027-04-01",
+    closesOn: "2027-05-03",
+    pickupFrom: "2027-05-07",
+    pickupTo: "2027-05-09",
+    photoPath: null,
+    visible: true,
+    sort: 30,
+  },
+];
 
 export const SAMPLE_PEAK_DATES = [
   { date: "2026-12-24", label: "Christmas Eve", surchargeCents: 3000 },

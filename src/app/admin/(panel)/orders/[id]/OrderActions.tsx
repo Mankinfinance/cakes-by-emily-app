@@ -30,8 +30,9 @@ export function OrderActions({ orderId, nextLabel, canCancel }: { orderId: strin
           type="button"
           className="btn btn-ghost"
           disabled={pending}
+          data-testid="admin-cancel"
           onClick={() => {
-            if (!confirm("Cancel this order? This frees the date. Refunds are made separately in Stripe.")) return;
+            if (!confirm("Cancel this order? Because you're cancelling, everything paid should be refunded (in Stripe), and any voucher or credit used comes back as credit. The date is offered to the waitlist.")) return;
             start(async () => {
               const r = await cancelOrderAction(orderId);
               setError(r.ok ? null : r.error);

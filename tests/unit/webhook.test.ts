@@ -64,8 +64,11 @@ beforeEach(async () => {
     depositCents: 6500,
     isRush: false,
     termsAcceptedAt: new Date().toISOString(),
+    dietary: [],
+    remindNextYear: false,
+    waitlistId: null,
   });
-  await repo.createPayment({ orderId, kind: "deposit", amountCents: 6500, stripeSessionId: "cs_test_abc" });
+  await repo.createPayment({ orderId, boxOrderId: null, voucherId: null, kind: "deposit", amountCents: 6500, stripeSessionId: "cs_test_abc" });
 });
 
 describe("Stripe webhook route", () => {
@@ -94,6 +97,31 @@ describe("Stripe webhook route", () => {
     const missing = await POST(new Request("https://cakes.test/api/stripe/webhook", { method: "POST", body: "{}" }));
     expect(missing.status).toBe(400);
     expect((await repo.getOrderById(orderId))?.amountPaidCents).toBe(0);
+  });
+
+  it("activates a gift voucher when its payment arrives", async () => {
+    const voucherId = crypto.randomUUID();
+    await repo.createVoucher({
+      id: voucherId,
+      kind: "gift",
+      codeHash: "hash-v1",
+      codeLast4: "ABCD",
+      amountCents: 5000,
+      balanceCents: 0,
+      status: "pending",
+      buyerName: "Kim",
+      buyerEmail: "kim@example.com",
+      recipientName: "Lee",
+      recipientEmail: "",
+      message: "",
+      expiresOn: "2027-11-07",
+      sourceOrderId: null,
+    });
+    await repo.createPayment({ orderId: null, boxOrderId: null, voucherId, kind: "voucher", amountCents: 5000, stripeSessionId: "cs_test_voucher" });
+    const res = await POST(signedRequest(event("evt_v", "cs_test_voucher")));
+    expect(res.status).toBe(200);
+    const v = await repo.getVoucherById(voucherId);
+    expect(v).toMatchObject({ status: "active", balanceCents: 5000 });
   });
 
   it("ignores unpaid sessions", async () => {

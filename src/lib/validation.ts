@@ -37,6 +37,10 @@ export const orderRequestSchema = z.object({
   notes: z.string().trim().max(1000).default(""),
   marketingOptIn: z.boolean().default(false),
   acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+  remindNextYear: z.boolean().default(false),
+  voucherCode: z.string().trim().max(40).default(""),
+  /** Set when claiming a waitlist offer. */
+  waitlistToken: z.string().trim().max(60).default(""),
 });
 export type OrderRequest = z.infer<typeof orderRequestSchema>;
 
@@ -58,6 +62,27 @@ export const settingsSchema = z
     closedWeekdays: z.array(z.number().int().min(0).max(6)).max(7),
     bookingHorizonDays: z.number().int().min(7).max(730),
     cancellationPolicy: z.string().max(2000),
+    freeDesignChangeRounds: z.number().int().min(0).max(10),
+    freeDateChanges: z.number().int().min(0).max(10),
+    cancelFullRefundDays: z.number().int().min(0).max(120),
+    cancelAdminFeeCents: cents,
+    cancelCreditDays: z.number().int().min(0).max(120),
+    voucherValidMonths: z.number().int().min(1).max(60),
+    voucherOptions: z
+      .array(z.object({ cents: z.number().int().min(500).max(100_000), visible: z.boolean() }))
+      .max(12),
+    voucherCustomEnabled: z.boolean(),
+    voucherCustomMinCents: z.number().int().min(500).max(100_000),
+    voucherCustomMaxCents: z.number().int().min(500).max(100_000),
+    reviewUrl: z.union([z.literal(""), z.string().trim().url().max(500).refine((u) => u.startsWith("https://"), "Use an https:// link")]),
+  })
+  .refine((s) => s.cancelCreditDays <= s.cancelFullRefundDays, {
+    message: "The credit window must start on or before the full refund window",
+    path: ["cancelCreditDays"],
+  })
+  .refine((s) => s.voucherCustomMinCents <= s.voucherCustomMaxCents, {
+    message: "Custom voucher minimum must be below the maximum",
+    path: ["voucherCustomMaxCents"],
   })
   .refine((s) => s.pickupStart < s.pickupEnd, { message: "Pickup start must be before pickup end", path: ["pickupEnd"] });
 
@@ -147,3 +172,58 @@ export function magicMatches(b: Uint8Array, type: string): boolean {
       return false;
   }
 }
+
+const personFields = {
+  customerName: z.string().trim().min(2, "Please enter your name").max(80),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email").max(120),
+  phone: z
+    .string()
+    .trim()
+    .regex(/^[0-9 +()-]{8,20}$/, "Please enter a valid phone number"),
+};
+
+export const waitlistRequestSchema = z.object({
+  date: isoDate,
+  config: cakeConfigSchema,
+  dietary: z.array(z.enum(dietaryKeys)).max(4).default([]),
+  ...personFields,
+});
+export type WaitlistRequest = z.infer<typeof waitlistRequestSchema>;
+
+export const boxOrderRequestSchema = z.object({
+  boxId: z.string().uuid(),
+  quantity: z.number().int().min(1).max(10),
+  pickupDate: isoDate,
+  pickupSlot: hhmm,
+  marketingOptIn: z.boolean().default(false),
+  acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+  ...personFields,
+});
+export type BoxOrderRequest = z.infer<typeof boxOrderRequestSchema>;
+
+export const voucherPurchaseSchema = z.object({
+  amountCents: z.number().int().min(500).max(100_000),
+  buyerName: personFields.customerName,
+  buyerEmail: personFields.email,
+  recipientName: z.string().trim().min(1, "Who is it for?").max(80),
+  recipientEmail: z.union([z.literal(""), z.string().trim().toLowerCase().email("Please enter a valid email").max(120)]).default(""),
+  message: z.string().trim().max(300).default(""),
+  acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+});
+export type VoucherPurchase = z.infer<typeof voucherPurchaseSchema>;
+
+export const seasonalBoxSchema = z
+  .object({
+    name: z.string().trim().min(1).max(80),
+    description: z.string().trim().max(300).default(""),
+    priceCents: z.number().int().min(100).max(100_000),
+    cap: z.number().int().min(0).max(10_000),
+    opensOn: isoDate,
+    closesOn: isoDate,
+    pickupFrom: isoDate,
+    pickupTo: isoDate,
+    visible: z.boolean(),
+    sort: z.number().int().min(0).max(100_000).default(0),
+  })
+  .refine((b) => b.opensOn <= b.closesOn, { message: "Pre-orders must open before they close", path: ["closesOn"] })
+  .refine((b) => b.pickupFrom <= b.pickupTo, { message: "Pickup window start must be before its end", path: ["pickupTo"] });

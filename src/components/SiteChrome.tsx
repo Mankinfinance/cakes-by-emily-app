@@ -9,8 +9,11 @@ export function SiteHeader() {
           {BUSINESS.name}
         </Link>
         <nav className="flex items-center gap-4 text-sm">
-          <Link href="/#how" className="hidden sm:inline hover:text-rose">
-            How it works
+          <Link href="/boxes" className="hidden sm:inline hover:text-rose">
+            Seasonal boxes
+          </Link>
+          <Link href="/vouchers" className="hidden sm:inline hover:text-rose">
+            Gift vouchers
           </Link>
           <Link href="/order" className="btn btn-primary !py-2 !px-4 text-sm">
             Design your cake
@@ -31,7 +34,13 @@ export function SiteFooter() {
             @{BUSINESS.instagram}
           </a>
         </p>
-        <nav className="flex gap-4">
+        <nav className="flex flex-wrap gap-4">
+          <Link href="/boxes" className="hover:text-rose">
+            Seasonal boxes
+          </Link>
+          <Link href="/vouchers" className="hover:text-rose">
+            Gift vouchers
+          </Link>
           <Link href="/terms" className="hover:text-rose">
             Terms
           </Link>

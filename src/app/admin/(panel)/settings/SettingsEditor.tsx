@@ -28,7 +28,7 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
     value: String(s[key] as number),
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [key]: Number(e.target.value) }),
   });
-  const dollars = (key: "rushFeeCents") => ({
+  const dollars = (key: "rushFeeCents" | "cancelAdminFeeCents") => ({
     value: String(s[key] / 100),
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [key]: Math.round(Number(e.target.value) * 100) }),
   });
@@ -119,9 +119,37 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
             <input type="number" min={0} className="field" {...num("changeCutoffDays")} />
           </label>
         </div>
+        <h3 className="mt-6 font-semibold">Changes and cancellations</h3>
+        <p className="text-sm text-muted">These rules drive the &ldquo;Change or cancel&rdquo; options on each order and the terms page.</p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <label>
+            <span className="label">Full refund if cancelled (days or more before)</span>
+            <input type="number" min={0} className="field" {...num("cancelFullRefundDays")} data-testid="cancel-full-days" />
+          </label>
+          <label>
+            <span className="label">Admin fee on those refunds ($)</span>
+            <input type="number" min={0} className="field" {...dollars("cancelAdminFeeCents")} data-testid="cancel-fee" />
+          </label>
+          <label>
+            <span className="label">Credit instead if cancelled (days or more before)</span>
+            <input type="number" min={0} className="field" {...num("cancelCreditDays")} />
+          </label>
+          <label>
+            <span className="label">Free date changes</span>
+            <input type="number" min={0} className="field" {...num("freeDateChanges")} />
+          </label>
+          <label>
+            <span className="label">Free design change rounds</span>
+            <input type="number" min={0} className="field" {...num("freeDesignChangeRounds")} />
+          </label>
+          <label>
+            <span className="label">Review link (Google review URL)</span>
+            <input type="url" className="field" placeholder="https://..." value={s.reviewUrl} onChange={(e) => setS({ ...s, reviewUrl: e.target.value })} data-testid="review-url" />
+          </label>
+        </div>
         <label className="mt-4 block">
-          <span className="label">Terms shown at checkout</span>
-          <textarea className="field" rows={4} value={s.cancellationPolicy} onChange={(e) => setS({ ...s, cancellationPolicy: e.target.value })} />
+          <span className="label">Extra notes added to the terms (optional)</span>
+          <textarea className="field" rows={3} value={s.cancellationPolicy} onChange={(e) => setS({ ...s, cancellationPolicy: e.target.value })} />
         </label>
         <button type="button" className="btn btn-primary mt-4" disabled={pending} onClick={() => run(() => saveSettingsAction(s), "Settings saved.")} data-testid="save-settings">
           Save settings

@@ -45,7 +45,7 @@ insert into public.catalogue_items (id, category, name, description, price_cents
 on conflict (id) do nothing;
 
 insert into public.settings (id, data) values
-  (1, '{"minNoticeDays":7,"rushEnabled":true,"rushFeeCents":4000,"rushMinDays":2,"dailyCap":3,"weeklyCap":12,"pickupStart":"09:00","pickupEnd":"16:00","slotMinutes":30,"slotCap":2,"depositPercent":50,"balanceDueDays":4,"changeCutoffDays":7,"closedWeekdays":[1],"bookingHorizonDays":180,"cancellationPolicy":"[Emily to confirm] Deposits secure your date. Cancellations 14 or more days before pickup get the deposit back minus a $20 admin fee. Inside 14 days the deposit is not refundable. Rush and peak fees are not refundable."}'::jsonb)
+  (1, '{"minNoticeDays":7,"rushEnabled":true,"rushFeeCents":4000,"rushMinDays":2,"dailyCap":3,"weeklyCap":12,"pickupStart":"09:00","pickupEnd":"16:00","slotMinutes":30,"slotCap":2,"depositPercent":50,"balanceDueDays":4,"changeCutoffDays":7,"closedWeekdays":[1],"bookingHorizonDays":180,"cancellationPolicy":"[Emily to confirm these terms before launch.]","freeDesignChangeRounds":1,"freeDateChanges":1,"cancelFullRefundDays":14,"cancelAdminFeeCents":2000,"cancelCreditDays":7,"voucherValidMonths":12,"voucherOptions":[{"cents":5000,"visible":true},{"cents":10000,"visible":true},{"cents":15000,"visible":true},{"cents":20000,"visible":true}],"voucherCustomEnabled":true,"voucherCustomMinCents":2000,"voucherCustomMaxCents":50000,"reviewUrl":""}'::jsonb)
 on conflict (id) do nothing;
 
 insert into public.peak_dates (date, label, surcharge_cents) values
@@ -53,3 +53,10 @@ insert into public.peak_dates (date, label, surcharge_cents) values
   ('2027-05-08', 'Mother''s Day weekend', 3000),
   ('2027-05-09', 'Mother''s Day', 3000)
 on conflict (date) do nothing;
+
+-- Phase 2: sample seasonal boxes (needs the phase 2 migration).
+insert into public.seasonal_boxes (id, name, description, price_cents, cap, opens_on, closes_on, pickup_from, pickup_to, visible, sort) values
+  ('b0000000-0000-4000-8000-000000000001', 'Christmas cookie box', '12 hand-iced Christmas cookies in a gift box. [Sample]', 4500, 40, '2026-11-01', '2026-12-14', '2026-12-18', '2026-12-23', true, 10),
+  ('b0000000-0000-4000-8000-000000000002', 'Teacher gift box', '6 iced cookies and a thank-you tag for the end of the school year. [Sample]', 3800, 30, '2026-11-01', '2026-12-07', '2026-12-10', '2026-12-17', true, 20),
+  ('b0000000-0000-4000-8000-000000000003', 'Mother''s Day box', 'Cupcakes, cookies and a mini cake for Mum. [Sample]', 6500, 25, '2027-04-01', '2027-05-03', '2027-05-07', '2027-05-09', true, 30)
+on conflict (id) do nothing;

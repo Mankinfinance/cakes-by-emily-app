@@ -59,6 +59,17 @@ export default function Home() {
           </div>
         </section>
 
+        <section className="mx-auto grid max-w-5xl gap-6 px-4 pt-14 sm:grid-cols-2">
+          <Link href="/boxes" className="card p-6 hover:border-rose" data-testid="home-boxes">
+            <h2 className="font-serif text-2xl">Seasonal boxes</h2>
+            <p className="mt-1 text-muted">Limited pre-order treat boxes for Christmas, teachers and Mother&apos;s Day.</p>
+          </Link>
+          <Link href="/vouchers" className="card p-6 hover:border-rose" data-testid="home-vouchers">
+            <h2 className="font-serif text-2xl">Gift vouchers</h2>
+            <p className="mt-1 text-muted">Emailed instantly, and spent on any cake.</p>
+          </Link>
+        </section>
+
         <section className="mx-auto max-w-5xl px-4 py-14">
           <div className="card flex flex-col items-start gap-4 p-8 sm:flex-row sm:items-center sm:justify-between">
             <div>
