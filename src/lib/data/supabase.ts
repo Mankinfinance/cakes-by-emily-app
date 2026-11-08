@@ -88,6 +88,7 @@ function toOrder(r: Row, items: Row[] = []): Order {
     email: r.email as string,
     phone: r.phone as string,
     marketingOptIn: r.marketing_opt_in as boolean,
+    photoOptOut: (r.photo_opt_out as boolean | undefined) ?? false,
     pickupDate: r.pickup_date as string,
     pickupSlot: r.pickup_slot as string,
     config: r.config as CakeConfig,
@@ -373,6 +374,7 @@ function toPrivate(r: Row): PrivateRequest {
     shareTokenHash: (r.share_token_hash as string | null) ?? null,
     lastNudgeAt: (r.last_nudge_at as string | null) ?? null,
     cancellation: (r.cancellation as PrivateRequest["cancellation"]) ?? null,
+    guestReductions: (r.guest_reductions as PrivateRequest["guestReductions"]) ?? [],
   };
 }
 
@@ -567,6 +569,7 @@ export const supabaseRepository: Repository = {
           email: o.email,
           phone: o.phone,
           marketing_opt_in: o.marketingOptIn,
+          photo_opt_out: o.photoOptOut ?? false,
           pickup_date: o.pickupDate,
           pickup_slot: o.pickupSlot,
           config: o.config,
@@ -1280,7 +1283,7 @@ export const supabaseRepository: Repository = {
     if (error && !isUniqueViolation(error)) throw new Error(`Database error: ${error.message}`);
   },
   async listGuests(requestId) {
-    return (check(await db().from("private_guests").select("*").eq("request_id", requestId).order("slot")) as Row[]).map(toGuest);
+    return (check(await db().from("private_guests").select("*").eq("request_id", requestId).neq("status", "removed").order("slot")) as Row[]).map(toGuest);
   },
   async getGuest(id) {
     const row = check(await db().from("private_guests").select("*").eq("id", id).maybeSingle()) as Row | null;
@@ -1454,6 +1457,28 @@ export const supabaseRepository: Repository = {
         p_record: w.record,
       }),
     ) as boolean;
+  },
+  async recordPartialCancelRefund(bookingId, at, refundedCents, refundIds) {
+    check(await db().rpc("record_partial_cancel_refund", { p_booking: bookingId, p_at: at, p_refunded: refundedCents, p_refund_ids: refundIds }));
+  },
+  async reducePrivateGuests(w) {
+    return check(
+      await db().rpc("reduce_private_guests", {
+        p_request: w.requestId,
+        p_expected_guests: w.expectedGuests,
+        p_new_guests: w.newGuests,
+        p_new_estimate: w.newEstimateCents,
+        p_remove_open: w.removeOpenIds,
+        p_remove_paid: w.removePaidIds,
+        p_share_updates: w.shareUpdates.map((u) => ({ id: u.id, share_cents: u.shareCents })),
+        p_free: w.freeIds,
+        p_cash_out: w.cashOutCents,
+        p_record: w.record,
+      }),
+    ) as boolean;
+  },
+  async recordReductionRefund(requestId, at, refundedCents, refundIds) {
+    check(await db().rpc("record_reduction_refund", { p_request: requestId, p_at: at, p_refunded: refundedCents, p_refund_ids: refundIds }));
   },
 };
 

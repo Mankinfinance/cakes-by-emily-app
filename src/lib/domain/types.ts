@@ -131,6 +131,8 @@ export interface Settings {
   // Phase 5
   /** Private class guests can change their own details up to this many days before the class. */
   guestEditCutoffDays: number;
+  /** Shows "Draft for review. Not legal advice." on the terms and privacy pages until Emily turns it off. */
+  legalDraftBanner: boolean;
 }
 
 export interface PrivatePackage {
@@ -234,6 +236,8 @@ export interface Order {
   email: string;
   phone: string;
   marketingOptIn: boolean;
+  /** The customer asked Emily not to photograph or post their cake. */
+  photoOptOut?: boolean;
   pickupDate: string;
   pickupSlot: string;
   config: CakeConfig;
@@ -625,6 +629,26 @@ export interface PrivateRequest {
   shareTokenHash: string | null;
   lastNudgeAt: string | null;
   cancellation: CancellationRecord | null;
+  /** Times the guest numbers were lowered after the deposit, oldest first. */
+  guestReductions?: GuestReduction[];
+}
+
+/** The guest numbers of a private class were lowered after the deposit. */
+export interface GuestReduction {
+  at: string;
+  by: "emily" | "organiser";
+  daysOut: number;
+  from: number;
+  to: number;
+  removedNames: string[];
+  refundCents: number;
+  creditCents: number;
+  keptCents: number;
+  voucherReturnedCents: number;
+  passCreditsReturned: number;
+  autoRefundedCents?: number;
+  refundIds?: string[];
+  summary: string;
 }
 
 /** One guest place in a private class, with its share of the balance. */
@@ -638,7 +662,8 @@ export interface PrivateGuest {
   dietary: DietaryFilter[];
   messageOptIn: boolean;
   shareCents: number;
-  status: "open" | "paid";
+  /** "removed" when the organiser or Emily lowered the guest numbers (kept for refund and code records). */
+  status: "open" | "paid" | "removed";
   holdKey: string | null;
   holdUntil: string | null;
   paidAt: string | null;

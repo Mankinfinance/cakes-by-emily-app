@@ -138,6 +138,7 @@ export const SAMPLE_SETTINGS: Settings = {
   passValidMonths: 12,
   autoRefunds: false,
   guestEditCutoffDays: 2,
+  legalDraftBanner: true,
 };
 
 export const SAMPLE_AUTOMATIONS: Automation[] = [

@@ -680,3 +680,98 @@ describe("phase 5 migration", () => {
     expect((await db.query<{ ok: boolean }>("select partial_cancel_booking($1, 3, $2::jsonb, 0, 9500, 99999, 0, 0, '2026-11-08', '{}'::jsonb) as ok", [BOOKING, JSON.stringify([{ name: "G1" }])])).rows[0].ok).toBe(false);
   });
 });
+
+describe("gaps migration (fewer private guests, refund ids, photo opt-out)", () => {
+  const REQ = "d0000000-0000-4000-8000-000000000001";
+
+  async function privateClass(id: string, guests: number, shareCents: number) {
+    await db.query(
+      `insert into private_requests (id, reference, package_key, package_name, guests, per_person_cents, deposit_cents, estimate_cents, preferred_date, preferred_time, contact_name, email, phone, status, amount_paid_cents)
+       values ($1, $2, 'deluxe', 'Deluxe', $3, 12000, 15000, $4, '2027-03-13', '14:00', 'Jo', 'jo@example.com', '0400000000', 'paid', 15000)`,
+      [id, `PVG-${id.slice(-5)}`, guests, guests * 12000],
+    );
+    for (let slot = 1; slot <= guests; slot++) await db.query("insert into private_guests (request_id, slot, share_cents) values ($1, $2, $3)", [id, slot, shareCents]);
+    return (await db.query<{ id: string }>("select id from private_guests where request_id = $1 order by slot", [id])).rows.map((r) => r.id);
+  }
+  const reduce = (id: string, expected: number, to: number, removeOpen: string[], updates: { id: string; share_cents: number }[], free: string[] = [], cashOut = 0, removePaid: string[] = []) =>
+    db.query<{ ok: boolean }>("select reduce_private_guests($1, $2, $3, $4, $5::uuid[], $6::uuid[], $7::jsonb, $8::uuid[], $9, $10::jsonb) as ok", [
+      id,
+      expected,
+      to,
+      to * 12000,
+      removeOpen,
+      removePaid,
+      JSON.stringify(updates),
+      free,
+      cashOut,
+      JSON.stringify({ at: `t-${expected}-${to}`, summary: "fewer" }),
+    ]);
+
+  it("keeps the new functions closed to customers", async () => {
+    for (const fn of ["reduce_private_guests", "record_reduction_refund", "record_partial_cancel_refund", "claim_guest_slot"]) {
+      const res = await db.query<{ ok: boolean }>(`select bool_or(has_function_privilege('anon', p.oid, 'execute')) as ok from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = $1`, [fn]);
+      expect(res.rows[0].ok, fn).toBe(false);
+    }
+  });
+
+  it("lowers the guest numbers once, even with two changes at once, and removed places can't be claimed", async () => {
+    const ids = await privateClass(REQ, 8, 10125);
+    const updates = ids.slice(0, 6).map((id) => ({ id, share_cents: 9500 }));
+    const both = await Promise.all([reduce(REQ, 8, 6, ids.slice(6), updates), reduce(REQ, 8, 6, ids.slice(6), updates)]);
+    expect(both.map((r) => r.rows[0].ok).sort()).toEqual([false, true]);
+    const r = (await db.query<{ guests: number; estimate_cents: number; guest_reductions: unknown[] }>("select guests, estimate_cents, guest_reductions from private_requests where id = $1", [REQ])).rows[0];
+    expect(r).toMatchObject({ guests: 6, estimate_cents: 72000 });
+    expect(r.guest_reductions).toHaveLength(1);
+    const rows = (await db.query<{ status: string; share_cents: number }>("select status, share_cents from private_guests where request_id = $1 order by slot", [REQ])).rows;
+    expect(rows.map((x) => x.status)).toEqual(["open", "open", "open", "open", "open", "open", "removed", "removed"]);
+    expect(rows.slice(0, 6).every((x) => x.share_cents === 9500)).toBe(true);
+    // Six claims succeed; a seventh finds no open place (the removed ones stay closed).
+    const claims = [];
+    for (let i = 0; i < 7; i++) claims.push((await db.query<{ id: string | null }>("select claim_guest_slot($1, $2, 'g@example.com', '', '{}', false) as id", [REQ, `G${i}`])).rows[0].id);
+    expect(claims.filter(Boolean)).toHaveLength(6);
+  });
+
+  it("refuses a stale count, a paid place passed as unpaid, a held place, and cash out above what was paid", async () => {
+    const id = "d0000000-0000-4000-8000-000000000002";
+    const ids = await privateClass(id, 7, 10000);
+    await db.query("update private_guests set status = 'paid', paid_at = now() where id = $1", [ids[6]]);
+    expect((await reduce(id, 8, 6, ids.slice(5), [])).rows[0].ok).toBe(false);
+    expect((await reduce(id, 7, 6, [ids[6]], [])).rows[0].ok).toBe(false);
+    await db.query("update private_guests set hold_key = gen_random_uuid(), hold_until = now() + interval '10 minutes' where id = $1", [ids[5]]);
+    expect((await reduce(id, 7, 6, [ids[5]], [])).rows[0].ok).toBe(false);
+    expect((await reduce(id, 7, 6, [ids[4]], [], [], 999999)).rows[0].ok).toBe(false);
+    // A paid place can be removed when passed as paid; a covered share is marked paid.
+    expect((await reduce(id, 7, 6, [], [{ id: ids[0], share_cents: 0 }], [ids[0]], 20000, [ids[6]])).rows[0].ok).toBe(false); // cash out above the $150 paid in
+    expect((await reduce(id, 7, 6, [], [{ id: ids[0], share_cents: 0 }], [ids[0]], 5000, [ids[6]])).rows[0].ok).toBe(true);
+    const rows = (await db.query<{ status: string }>("select status from private_guests where id = any($1::uuid[]) order by slot", [[ids[0], ids[6]]])).rows;
+    expect(rows.map((x) => x.status)).toEqual(["paid", "removed"]);
+    expect((await db.query<{ n: number }>("select amount_paid_cents as n from private_requests where id = $1", [id])).rows[0].n).toBe(10000);
+  });
+
+  it("saves refund ids onto the matching record only", async () => {
+    await db.query("update private_requests set guest_reductions = $2::jsonb where id = $1", [REQ, JSON.stringify([{ at: "a1", summary: "one" }, { at: "a2", summary: "two" }])]);
+    await db.query("select record_reduction_refund($1, 'a2', 1234, $2::jsonb)", [REQ, JSON.stringify(["re_1", "re_2"])]);
+    const recs = (await db.query<{ guest_reductions: { at: string; autoRefundedCents?: number; refundIds?: string[] }[] }>("select guest_reductions from private_requests where id = $1", [REQ])).rows[0].guest_reductions;
+    expect(recs[0].refundIds).toBeUndefined();
+    expect(recs[1]).toMatchObject({ at: "a2", autoRefundedCents: 1234, refundIds: ["re_1", "re_2"] });
+
+    const SESSION = "d1000000-0000-4000-8000-000000000001";
+    const BOOKING = "d2000000-0000-4000-8000-000000000001";
+    await db.query("insert into class_sessions (id, class_type_id, date, start_time, seats, booked) values ($1, 'class-florals', '2027-03-06', '14:00', 8, 2)", [SESSION]);
+    await db.query(
+      `insert into class_bookings (id, reference, token_hash, session_id, seats, guests, contact_name, email, phone, unit_price_cents, discount_cents, total_cents, amount_paid_cents, status, terms_accepted_at, partial_cancellations)
+       values ($1, 'CLS-GAP1', 'hash-gap-1', $2, 2, '[]'::jsonb, 'Ann', 'ann@example.com', '0400000000', 9500, 0, 19000, 19000, 'paid', now(), $3::jsonb)`,
+      [BOOKING, SESSION, JSON.stringify([{ at: "p1", summary: "x" }])],
+    );
+    await db.query("select record_partial_cancel_refund($1, 'p1', 9500, $2::jsonb)", [BOOKING, JSON.stringify(["re_9"])]);
+    const pc = (await db.query<{ partial_cancellations: { refundIds?: string[]; autoRefundedCents?: number }[] }>("select partial_cancellations from class_bookings where id = $1", [BOOKING])).rows[0].partial_cancellations;
+    expect(pc[0]).toMatchObject({ autoRefundedCents: 9500, refundIds: ["re_9"] });
+  });
+
+  it("stores the photo opt-out on orders, off by default", async () => {
+    const id = "d3000000-0000-4000-8000-000000000001";
+    await insertOrder(id, "hash-photo-1");
+    expect((await db.query<{ p: boolean }>("select photo_opt_out as p from orders where id = $1", [id])).rows[0].p).toBe(false);
+    await expect(db.query("update private_guests set status = 'gone' where request_id = $1", [REQ])).rejects.toThrow();
+  });
+});

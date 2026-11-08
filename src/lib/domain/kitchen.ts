@@ -18,6 +18,8 @@ export interface KitchenCake {
   topperText: string;
   allergyNotes: string;
   dietary: string[];
+  /** Don't photograph or post this cake. */
+  noPhotos: boolean;
   done: boolean;
 }
 
@@ -81,6 +83,7 @@ export function kitchenSheet(orders: Order[], boxes: BoxOrder[], from: string, t
       topperText: o.config.topperText,
       allergyNotes: o.allergyNotes,
       dietary: o.dietary.map((d) => DIETARY_FILTERS[d]?.label ?? d),
+      noPhotos: !!o.photoOptOut,
       done: o.kitchenDone,
     });
   }

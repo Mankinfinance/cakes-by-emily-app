@@ -100,6 +100,16 @@ export default async function SessionAdmin({ params }: PageProps<"/admin/classes
                 {b.reference}: {b.contactName}, {b.seats} seat{b.seats === 1 ? "" : "s"}, {formatAud(b.amountPaidCents)}
                 {(b.passCredits ?? 0) > 0 && ` + ${b.passCredits} pass credit${b.passCredits === 1 ? "" : "s"}`}
                 {(b.voucherAppliedCents ?? 0) > 0 && ` + ${formatAud(b.voucherAppliedCents!)} voucher`} {b.status === "cancelled" && `(cancelled${b.cancellation?.by === "customer" ? " by the customer" : ""})`}
+                {(b.partialCancellations ?? []).map((p) => (
+                  <span key={p.at} className="mt-1 block text-xs text-muted" data-testid="partial-record">
+                    {p.summary}
+                    {(p.autoRefundedCents ?? 0) > 0
+                      ? ` Refunded through Stripe: ${formatAud(p.autoRefundedCents!)} (${(p.refundIds ?? []).join(", ")}).`
+                      : p.refundCents > 0
+                        ? ` Refund ${formatAud(p.refundCents)} by hand in Stripe.`
+                        : ""}
+                  </span>
+                ))}
               </span>
               {b.status === "paid" && (
                 <ActionButton

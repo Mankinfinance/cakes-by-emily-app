@@ -68,6 +68,11 @@ export default async function KitchenPage({ searchParams }: PageProps<"/admin/ki
                           {l.decorations.length > 0 && <p className="text-muted">Decorations: {l.decorations.join(", ")}</p>}
                           {l.extras.length > 0 && <p className="text-muted">Extras: {l.extras.join(", ")}</p>}
                           {l.topperText && <p>Topper: &ldquo;{l.topperText}&rdquo;</p>}
+                          {l.noPhotos && (
+                            <p className="mt-1 inline-block rounded-md border-2 border-plum px-2 py-0.5 text-xs font-semibold" data-testid="no-photos">
+                              NO PHOTOS: please don&apos;t photograph or post this cake
+                            </p>
+                          )}
                           {(l.allergyNotes || l.dietary.length > 0) && (
                             <p className="allergy mt-1 rounded-md bg-rose px-2 py-1 font-semibold text-white" data-testid="allergy">
                               ALLERGIES: {[...l.dietary, l.allergyNotes].filter(Boolean).join(". ")}

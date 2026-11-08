@@ -855,7 +855,7 @@ export const memoryRepository: Repository = {
     );
   },
   async listGuests(requestId) {
-    return clone(store().guests.filter((g) => g.requestId === requestId)).sort((a, b) => a.slot - b.slot);
+    return clone(store().guests.filter((g) => g.requestId === requestId && g.status !== "removed")).sort((a, b) => a.slot - b.slot);
   },
   async getGuest(id) {
     const g = store().guests.find((x) => x.id === id);
@@ -863,7 +863,7 @@ export const memoryRepository: Repository = {
   },
   async claimGuestSlot(requestId, d) {
     const g = store()
-      .guests.filter((x) => x.requestId === requestId && !x.name)
+      .guests.filter((x) => x.requestId === requestId && x.status === "open" && !x.name)
       .sort((a, b) => a.slot - b.slot)[0];
     if (!g) return null;
     Object.assign(g, clone(d), { detailsAt: new Date().toISOString() });
@@ -1109,6 +1109,47 @@ export const memoryRepository: Repository = {
       s.passRedemptions.push({ passId: p.id, bookingId: b.id, credits: -w.passCreditsBack });
     }
     return true;
+  },
+  async recordPartialCancelRefund(bookingId, at, refundedCents, refundIds) {
+    const b = store().bookings.find((x) => x.id === bookingId);
+    const rec = b?.partialCancellations?.find((p) => p.at === at);
+    if (rec) Object.assign(rec, { autoRefundedCents: refundedCents, refundIds: [...refundIds] });
+  },
+  async reducePrivateGuests(w) {
+    const s = store();
+    const r = s.privateRequests.find((x) => x.id === w.requestId);
+    if (!r || r.status !== "paid" || r.guests !== w.expectedGuests) return false;
+    const now = new Date().toISOString();
+    const find = (id: string) => s.guests.find((g) => g.id === id && g.requestId === r.id);
+    const free = (g: { status: string; holdKey: string | null; holdUntil: string | null }) => g.status === "open" && (!g.holdKey || !g.holdUntil || g.holdUntil <= now);
+    for (const id of w.removeOpenIds) {
+      const g = find(id);
+      if (!g || !free(g)) return false;
+    }
+    for (const id of w.removePaidIds) {
+      const g = find(id);
+      if (!g || g.status !== "paid") return false;
+    }
+    for (const u of w.shareUpdates) {
+      const g = find(u.id);
+      if (!g || !free(g) || u.shareCents < 0 || (g.voucherAppliedCents ?? 0) + (g.passAppliedCents ?? 0) > u.shareCents) return false;
+    }
+    if (w.cashOutCents < 0 || w.cashOutCents > r.amountPaidCents) return false;
+    for (const id of [...w.removeOpenIds, ...w.removePaidIds]) Object.assign(find(id)!, { status: "removed" });
+    for (const u of w.shareUpdates) find(u.id)!.shareCents = u.shareCents;
+    for (const id of w.freeIds) Object.assign(find(id)!, { status: "paid", paidAt: now, holdKey: null, holdUntil: null });
+    Object.assign(r, {
+      guests: w.newGuests,
+      estimateCents: w.newEstimateCents,
+      amountPaidCents: r.amountPaidCents - w.cashOutCents,
+      guestReductions: [...(r.guestReductions ?? []), clone(w.record)],
+    });
+    return true;
+  },
+  async recordReductionRefund(requestId, at, refundedCents, refundIds) {
+    const r = store().privateRequests.find((x) => x.id === requestId);
+    const rec = r?.guestReductions?.find((p) => p.at === at);
+    if (rec) Object.assign(rec, { autoRefundedCents: refundedCents, refundIds: [...refundIds] });
   },
 };
 

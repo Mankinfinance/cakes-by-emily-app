@@ -304,7 +304,7 @@ test.describe.serial("phase 2", () => {
 
   test("the terms page is written from Emily's settings", async ({ page }) => {
     await page.goto("/terms");
-    await expect(page.getByTestId("terms-rules")).toContainText("Cancel 14 days or more before pickup: your deposit back, minus a $20 admin fee.");
+    await expect(page.getByTestId("legal-section-5")).toContainText("14 days or more before pickup: your deposit is refunded, less an admin fee of $20.");
   });
 
   test("the new endpoints reject bad input and unknown orders", async ({ request }) => {

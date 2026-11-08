@@ -37,6 +37,7 @@ export const orderRequestSchema = z.object({
   allergyNotes: z.string().trim().max(500).default(""),
   notes: z.string().trim().max(1000).default(""),
   marketingOptIn: z.boolean().default(false),
+  photoOptOut: z.boolean().default(false),
   acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
   remindNextYear: z.boolean().default(false),
   voucherCode: z.string().trim().max(40).default(""),
@@ -110,6 +111,7 @@ export const settingsSchema = z
     passValidMonths: z.number().int().min(1).max(60),
     autoRefunds: z.boolean(),
     guestEditCutoffDays: z.number().int().min(0).max(60),
+    legalDraftBanner: z.boolean(),
   })
   .refine((s) => s.classCreditDays <= s.classFullRefundDays, {
     message: "The class credit window must start on or before the full refund window",

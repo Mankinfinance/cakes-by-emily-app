@@ -144,6 +144,8 @@ export default async function AdminOrder({ params }: PageProps<"/admin/orders/[i
             </dd>
             <dt className="text-muted">Marketing</dt>
             <dd>{order.marketingOptIn ? "Opted in" : "No"}</dd>
+            <dt className="text-muted">Photos</dt>
+            <dd data-testid="order-photo-pref">{order.photoOptOut ? "Don't photograph or post this cake" : "Happy for the cake to be shared"}</dd>
             <dt className="text-muted">Birthday reminder</dt>
             <dd>{order.remindNextYear ? "Yes, next year" : "No"}</dd>
             <dt className="text-muted">Date changes</dt>

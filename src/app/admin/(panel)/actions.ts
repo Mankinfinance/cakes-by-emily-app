@@ -16,6 +16,7 @@ import { AUTOMATION_KEYS } from "@/lib/domain/types";
 import { cancelWithTerms, sendForApproval } from "@/lib/services/changes";
 import { acceptPrivate, cancelBooking, cancelClass, cancelPrivate, createSeries, declinePrivate, previewSeries, setCheckIn } from "@/lib/services/classes";
 import { emailGallery, removeClassPhoto, uploadClassPhoto } from "@/lib/services/gallery";
+import { reduceGuests, reduceGuestsPreview } from "@/lib/services/private-reduce";
 import {
   advanceStage,
   finishVideoUpload,
@@ -519,6 +520,40 @@ export async function cancelPrivateAction(id: string): Promise<ActionResult> {
     await cancelPrivate(await deps(), uuid.parse(id));
     revalidatePath("/admin/classes/private");
     return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Fewer guests for a private class -------------------------------------------
+
+const reduceInput = z.object({ id: uuid, guests: z.number().int().min(1).max(50), waive: z.boolean() });
+
+export async function previewReduceGuestsAction(
+  id: string,
+  guests: number,
+  waive: boolean,
+): Promise<ActionResult<{ ok: boolean; problem: string | null; summary: string; refundCents: number }>> {
+  await requireAdmin();
+  try {
+    const input = reduceInput.parse({ id, guests, waive });
+    const d = await deps();
+    const r = await d.repo.getPrivateRequest(input.id);
+    if (!r) return { ok: false, error: "Request not found." };
+    const { quote } = await reduceGuestsPreview(d, r, input.guests, { by: "emily", waive: input.waive });
+    return { ok: true, data: { ok: quote.ok, problem: quote.problem, summary: quote.summary, refundCents: quote.refundCents } };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function reduceGuestsAction(id: string, guests: number, waive: boolean): Promise<ActionResult<{ summary: string }>> {
+  await requireAdmin();
+  try {
+    const input = reduceInput.parse({ id, guests, waive });
+    const rec = await reduceGuests(await deps(), input.id, input.guests, { by: "emily", waive: input.waive });
+    revalidatePath("/admin/classes/private");
+    return { ok: true, data: { summary: rec.summary } };
   } catch (err) {
     return fail(err);
   }

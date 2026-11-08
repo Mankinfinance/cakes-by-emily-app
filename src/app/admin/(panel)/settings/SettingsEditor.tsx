@@ -204,6 +204,13 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
             instead of asking you to do it. Try it in Stripe test mode first. If Stripe refuses a refund, you&apos;ll get an email to do it by hand.
           </span>
         </label>
+        <label className="mt-4 flex items-start gap-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={s.legalDraftBanner} onChange={(e) => setS({ ...s, legalDraftBanner: e.target.checked })} data-testid="legal-draft-banner-toggle" />
+          <span>
+            Show &ldquo;Draft for review. Not legal advice.&rdquo; on the terms and privacy pages. Untick once the wording has been checked and the [square
+            bracket] placeholders are filled in.
+          </span>
+        </label>
         <label className="mt-4 block">
           <span className="label">Extra notes added to the terms (optional)</span>
           <textarea className="field" rows={3} value={s.cancellationPolicy} onChange={(e) => setS({ ...s, cancellationPolicy: e.target.value })} />

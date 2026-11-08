@@ -24,6 +24,7 @@ import type {
   Order,
   OrderUpdate,
   PartialCancellation,
+  GuestReduction,
   Payment,
   PeakDate,
   SeasonalBox,
@@ -333,6 +334,31 @@ export interface Repository {
   markSharePaidFree(guestId: string): Promise<boolean>;
   /** Cancel some seats of a paid booking in one step. False if the booking changed since the quote. */
   partialCancelBooking(p: PartialCancelWrite): Promise<boolean>;
+  /** Save the automatic Stripe refund onto a partial seat cancellation record (matched by its time). */
+  recordPartialCancelRefund(bookingId: string, at: string, refundedCents: number, refundIds: string[]): Promise<void>;
+  /** Lower a private class's guest numbers in one step. False if anything changed since the quote. */
+  reducePrivateGuests(w: ReduceGuestsWrite): Promise<boolean>;
+  /** Save the automatic Stripe refund onto a guest reduction record (matched by its time). */
+  recordReductionRefund(requestId: string, at: string, refundedCents: number, refundIds: string[]): Promise<void>;
+}
+
+export interface ReduceGuestsWrite {
+  requestId: string;
+  /** Guest numbers when the quote was made. */
+  expectedGuests: number;
+  newGuests: number;
+  newEstimateCents: number;
+  /** Unpaid places to remove (must still be unpaid and not mid-checkout). */
+  removeOpenIds: string[];
+  /** Paid places to remove (must still be paid). */
+  removePaidIds: string[];
+  /** New share amounts for the places still to pay. */
+  shareUpdates: { id: string; shareCents: number }[];
+  /** Places whose new share is fully covered: marked paid with nothing to pay. */
+  freeIds: string[];
+  /** Money taken off what the booking has been paid (refunded or turned into credit). */
+  cashOutCents: number;
+  record: GuestReduction;
 }
 
 /** What vouchers and credit codes can be used on (besides cake orders). */

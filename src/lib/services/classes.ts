@@ -622,7 +622,10 @@ export async function cancelSomeSeats(deps: LightDeps, bookingId: string, guestI
   }
   if (q.refundCents > 0) {
     const refund = await refundTarget(deps, "booking", booking.id, q.refundCents, `partial-${record.at}`, `class booking ${booking.reference} (${q.seatsCancelled} seats)`);
-    if (refund.refundedCents > 0) record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+    if (refund.refundedCents > 0) {
+      record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+      await deps.repo.recordPartialCancelRefund(booking.id, record.at, refund.refundedCents, refund.refundIds);
+    }
   }
   const updated = (await deps.repo.getBookingById(booking.id))!;
   await sendSafely(deps.mailer, seatsCancelledEmail(updated, type, session, record, ticketLink(deps.baseUrl, booking.id)));

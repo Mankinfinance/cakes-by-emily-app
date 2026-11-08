@@ -67,6 +67,7 @@ export function Builder({ items, settings, today, cancelled }: Props) {
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoName, setPhotoName] = useState("");
   const [acceptTerms, setAcceptTerms] = useState(false);
+  const [photoOptOut, setPhotoOptOut] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fullDate, setFullDate] = useState<string | null>(null);
@@ -204,6 +205,7 @@ export function Builder({ items, settings, today, cancelled }: Props) {
           voucherCode: codeState?.applied ?? "",
           referralCode: referral.trim(),
           acceptTerms,
+          photoOptOut,
         }),
       );
       if (photo) form.set("inspiration", photo, photoName || "inspiration.jpg");
@@ -525,6 +527,10 @@ export function Builder({ items, settings, today, cancelled }: Props) {
                     </a>
                     .
                   </span>
+                </label>
+                <label className="mt-2 flex items-start gap-2">
+                  <input type="checkbox" className="mt-1" checked={photoOptOut} onChange={(e) => setPhotoOptOut(e.target.checked)} data-testid="photo-opt-out" />
+                  <span>Please don&apos;t photograph or post my cake online. (Optional.)</span>
                 </label>
               </div>
             </div>

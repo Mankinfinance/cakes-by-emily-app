@@ -134,6 +134,7 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
     email: req.email,
     phone: req.phone,
     marketingOptIn: req.marketingOptIn,
+    photoOptOut: req.photoOptOut ?? false,
     pickupDate: req.pickupDate,
     pickupSlot: req.pickupSlot,
     config,
