@@ -3,7 +3,11 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
-    alias: { "@": path.resolve(import.meta.dirname, "src") },
+    alias: {
+      "@": path.resolve(import.meta.dirname, "src"),
+      // "server-only" throws outside Next's server bundles. Route handler tests import it.
+      "server-only": path.resolve(import.meta.dirname, "tests/unit/stubs/server-only.ts"),
+    },
   },
   test: {
     include: ["tests/unit/**/*.test.ts"],

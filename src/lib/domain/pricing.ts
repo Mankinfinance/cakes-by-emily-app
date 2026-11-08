@@ -95,6 +95,12 @@ export function priceCake(
   };
 }
 
-export function balanceOwing(order: { totalCents: number; amountPaidCents: number }): number {
-  return Math.max(0, order.totalCents - order.amountPaidCents);
+/** What is still owed, after cash paid and any voucher or credit code used. */
+export function balanceOwing(order: { totalCents: number; amountPaidCents: number; voucherAppliedCents?: number }): number {
+  return Math.max(0, order.totalCents - order.amountPaidCents - (order.voucherAppliedCents ?? 0));
+}
+
+/** What the customer pays at checkout once a voucher or credit has been taken off the deposit. */
+export function dueAtCheckout(depositCents: number, voucherAppliedCents: number): number {
+  return Math.max(0, depositCents - voucherAppliedCents);
 }

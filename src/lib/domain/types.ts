@@ -76,8 +76,31 @@ export interface Settings {
   closedWeekdays: number[];
   /** How far ahead customers can book, in days. */
   bookingHorizonDays: number;
-  /** Plain text terms values shown at checkout. */
+  /** Extra notes added to the generated terms (optional). */
   cancellationPolicy: string;
+  /** Free design change rounds after Emily sends a design for approval. */
+  freeDesignChangeRounds: number;
+  /** How many times a customer can move their pickup date online for free. */
+  freeDateChanges: number;
+  /** Cancel this many days or more before pickup: deposit back minus the admin fee. */
+  cancelFullRefundDays: number;
+  cancelAdminFeeCents: number;
+  /** Cancel between this and cancelFullRefundDays: what was paid becomes credit. Inside it: nothing back. */
+  cancelCreditDays: number;
+  /** Gift vouchers and credit codes expire after this many months. */
+  voucherValidMonths: number;
+  /** Voucher amounts offered to buyers, each with its own "Show to customers" switch. */
+  voucherOptions: VoucherOption[];
+  voucherCustomEnabled: boolean;
+  voucherCustomMinCents: number;
+  voucherCustomMaxCents: number;
+  /** Where the thank-you message sends people to leave a review (for example a Google review link). */
+  reviewUrl: string;
+}
+
+export interface VoucherOption {
+  cents: number;
+  visible: boolean;
 }
 
 export interface PeakDate {
@@ -94,6 +117,7 @@ export interface DayOff {
 export const STAGES = [
   "awaiting_payment",
   "received",
+  "awaiting_approval",
   "design_confirmed",
   "baking",
   "decorating",
@@ -105,6 +129,7 @@ export type Stage = (typeof STAGES)[number] | "cancelled";
 export const STAGE_LABELS: Record<Stage, string> = {
   awaiting_payment: "Awaiting deposit",
   received: "Order received",
+  awaiting_approval: "Awaiting your approval",
   design_confirmed: "Design confirmed",
   baking: "Baking",
   decorating: "Decorating",
@@ -175,12 +200,40 @@ export interface Order {
   termsAcceptedAt: string;
   createdAt: string;
   remindersSent: string[];
+  dietary: DietaryFilter[];
+  /** Birthday orders: the customer asked for a reminder before next year's birthday. */
+  remindNextYear: boolean;
+  dateChangesUsed: number;
+  designChangesUsed: number;
+  approvedAt: string | null;
+  /** A gift voucher or credit code used on this order, and how much of it. */
+  voucherId: string | null;
+  voucherAppliedCents: number;
+  /** Set when this order came from a waitlist offer. */
+  waitlistId: string | null;
+  kitchenDone: boolean;
+  cancellation: CancellationRecord | null;
+}
+
+export interface CancellationRecord {
+  at: string;
+  by: "customer" | "emily" | "expired";
+  daysOut: number;
+  /** Cash Emily needs to refund in Stripe. */
+  refundCents: number;
+  /** Cash paid that became a credit code. */
+  creditCents: number;
+  /** Cash kept under the terms. */
+  keptCents: number;
+  /** Voucher or credit used on the order that was given back. */
+  voucherReturnedCents: number;
+  summary: string;
 }
 
 export interface OrderUpdate {
   id: string;
   orderId: string;
-  kind: "stage" | "photo" | "video" | "note";
+  kind: "stage" | "photo" | "video" | "note" | "sketch" | "change_request" | "approval";
   caption: string;
   mediaPath: string | null;
   createdAt: string;
@@ -188,10 +241,127 @@ export interface OrderUpdate {
 
 export interface Payment {
   id: string;
-  orderId: string;
-  kind: "deposit" | "balance";
+  /** Exactly one of orderId, boxOrderId or voucherId is set. */
+  orderId: string | null;
+  boxOrderId: string | null;
+  voucherId: string | null;
+  kind: "deposit" | "balance" | "box" | "voucher";
   amountCents: number;
   stripeSessionId: string;
   status: "pending" | "paid";
+  createdAt: string;
+}
+
+// Automatic messages ----------------------------------------------------
+
+export const AUTOMATION_KEYS = [
+  "order_received",
+  "design_confirmed",
+  "balance_reminder",
+  "pickup_details",
+  "thank_you",
+  "rebook_reminder",
+] as const;
+export type AutomationKey = (typeof AUTOMATION_KEYS)[number];
+
+export interface Automation {
+  key: AutomationKey;
+  enabled: boolean;
+  /**
+   * balance_reminder and pickup_details: days before pickup.
+   * thank_you and rebook_reminder: days after pickup.
+   * Unused for the others.
+   */
+  days: number;
+}
+
+export interface SentMessage {
+  orderId: string;
+  key: string;
+  sentAt: string;
+}
+
+// Waitlist --------------------------------------------------------------
+
+export type WaitlistStatus = "waiting" | "offered" | "claimed" | "expired" | "removed";
+
+export interface WaitlistEntry {
+  id: string;
+  date: string;
+  customerName: string;
+  email: string;
+  phone: string;
+  config: CakeConfig;
+  dietary: DietaryFilter[];
+  status: WaitlistStatus;
+  offerTokenHash: string | null;
+  offeredAt: string | null;
+  offerExpiresAt: string | null;
+  orderId: string | null;
+  createdAt: string;
+}
+
+// Seasonal boxes --------------------------------------------------------
+
+export interface SeasonalBox {
+  id: string;
+  name: string;
+  description: string;
+  priceCents: number;
+  cap: number;
+  sold: number;
+  opensOn: string;
+  closesOn: string;
+  pickupFrom: string;
+  pickupTo: string;
+  photoPath: string | null;
+  visible: boolean;
+  sort: number;
+}
+
+export type BoxOrderStatus = "awaiting_payment" | "paid" | "collected" | "cancelled";
+
+export interface BoxOrder {
+  id: string;
+  reference: string;
+  tokenHash: string;
+  boxId: string;
+  boxName: string;
+  quantity: number;
+  unitPriceCents: number;
+  totalCents: number;
+  amountPaidCents: number;
+  customerName: string;
+  email: string;
+  phone: string;
+  marketingOptIn: boolean;
+  pickupDate: string;
+  pickupSlot: string;
+  status: BoxOrderStatus;
+  kitchenDone: boolean;
+  createdAt: string;
+}
+
+// Gift vouchers and credit codes ---------------------------------------
+
+export type VoucherKind = "gift" | "credit";
+export type VoucherStatus = "pending" | "active" | "void";
+
+export interface Voucher {
+  id: string;
+  kind: VoucherKind;
+  codeHash: string;
+  codeLast4: string;
+  amountCents: number;
+  balanceCents: number;
+  status: VoucherStatus;
+  buyerName: string;
+  /** For gift vouchers the buyer; for credit codes the customer who owns the credit. */
+  buyerEmail: string;
+  recipientName: string;
+  recipientEmail: string;
+  message: string;
+  expiresOn: string;
+  sourceOrderId: string | null;
   createdAt: string;
 }

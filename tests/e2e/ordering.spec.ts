@@ -80,7 +80,7 @@ test.describe.serial("ordering and admin", () => {
     // Details
     await expect(page.getByTestId("next")).toBeDisabled();
     await page.getByLabel("Your name").fill("Jess Nguyen");
-    await page.getByLabel("Email").fill("jess@example.com");
+    await page.getByLabel("Email", { exact: true }).fill("jess@example.com");
     await page.getByLabel("Mobile").fill("0412 345 678");
     await page.getByLabel("Allergies Emily should know about").fill("Tree nuts");
     await page.getByLabel("Inspiration photo (optional)").setInputFiles({ name: "idea.png", mimeType: "image/png", buffer: PNG });
