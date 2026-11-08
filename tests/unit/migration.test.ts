@@ -577,3 +577,106 @@ describe("phase 4 migration", () => {
     );
   });
 });
+
+describe("phase 5 migration", () => {
+  const REQ = "c0000000-0000-4000-8000-000000000001";
+  const SESSION = "c1000000-0000-4000-8000-000000000001";
+
+  async function shares(id: string) {
+    await db.query(
+      `insert into private_requests (id, reference, package_key, package_name, guests, per_person_cents, deposit_cents, estimate_cents, preferred_date, preferred_time, contact_name, email, phone, status)
+       values ($1, $2, 'deluxe', 'Deluxe', 2, 12000, 15000, 24000, '2027-02-13', '14:00', 'Jo', 'jo@example.com', '0400000000', 'paid')`,
+      [id, `PV5-${id.slice(-5)}`],
+    );
+    for (const slot of [1, 2]) await db.query("insert into private_guests (request_id, slot, share_cents) values ($1, $2, 4500)", [id, slot]);
+    return (await db.query<{ id: string }>("select id from private_guests where request_id = $1 order by slot", [id])).rows.map((r) => r.id);
+  }
+  const voucher = (id: string, hash: string, cents: number) =>
+    db.query(`insert into vouchers (id, kind, code_hash, code_last4, amount_cents, balance_cents, status, buyer_email, expires_on) values ($1, 'gift', $2, 'WXYZ', $3, $3, 'active', 'k@example.com', '2027-11-01')`, [id, hash, cents]);
+  const pass = (id: string, hash: string, credits = 3) =>
+    db.query(`insert into class_passes (id, code_hash, code_last4, credits_total, credits_left, status, buyer_email, expires_on) values ($1, $2, 'ABCD', $3, $3, 'active', 'ann@example.com', '2027-11-01')`, [id, hash, credits]);
+  const guestRow = async (id: string) =>
+    (await db.query<{ status: string; voucher_applied_cents: number; pass_applied_cents: number }>("select status, voucher_applied_cents, pass_applied_cents from private_guests where id = $1", [id])).rows[0];
+
+  it("keeps every new function closed to customers", async () => {
+    const fns = ["redeem_pass_share", "return_pass_share", "mark_share_paid_free", "partial_cancel_booking", "redeem_voucher_for", "return_voucher_for"];
+    for (const fn of fns) {
+      const res = await db.query<{ ok: boolean }>(`select bool_or(has_function_privilege('anon', p.oid, 'execute')) as ok from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = $1`, [fn]);
+      expect(res.rows[0].ok, fn).toBe(false);
+    }
+    await db.exec("set role anon");
+    expect((await db.query("select * from private_guests")).rows).toHaveLength(0);
+    await db.exec("reset role");
+  });
+
+  it("puts one voucher on a share, never more than it owes, and gives it back once", async () => {
+    const [a, b] = await shares(REQ);
+    await voucher("c2000000-0000-4000-8000-000000000001", "hash-share-v", 10000);
+    await voucher("c2000000-0000-4000-8000-000000000002", "hash-share-v2", 10000);
+    const redeem = async (hash: string, g: string) => (await db.query<{ n: number }>("select redeem_voucher_for('share', $1, $2, 99999, '2026-11-08') as n", [hash, g])).rows[0].n;
+    expect(await redeem("hash-share-v", a)).toBe(4500);
+    expect(await redeem("hash-share-v2", a)).toBe(0);
+    // A share held by a live checkout takes no code.
+    await db.query("update private_guests set hold_key = 'c9000000-0000-4000-8000-000000000001', hold_until = now() + interval '10 minutes' where id = $1", [b]);
+    expect(await redeem("hash-share-v", b)).toBe(0);
+    expect((await guestRow(a)).voucher_applied_cents).toBe(4500);
+    expect((await db.query<{ amount: number }>("select * from return_voucher_for('share', $1, '2026-11-08')", [a])).rows[0].amount).toBe(4500);
+    expect((await db.query<{ amount: number }>("select * from return_voucher_for('share', $1, '2026-11-08')", [a])).rows[0].amount).toBe(0);
+    expect((await db.query<{ b: number }>("select balance_cents as b from vouchers where code_hash = 'hash-share-v'")).rows[0].b).toBe(10000);
+  });
+
+  it("uses one pass credit per share, refuses a second code, and pays a fully covered share once", async () => {
+    const [a, b] = await shares("c0000000-0000-4000-8000-000000000002");
+    await pass("c3000000-0000-4000-8000-000000000001", "hash-share-pass");
+    await voucher("c2000000-0000-4000-8000-000000000003", "hash-share-v3", 10000);
+    const redeemPass = async (g: string, value: number) => (await db.query<{ n: number }>("select redeem_pass_share('hash-share-pass', $1, $2, '2026-11-08') as n", [g, value])).rows[0].n;
+    const results = await Promise.all([redeemPass(a, 8500), redeemPass(a, 8500)]);
+    expect(results.sort()).toEqual([0, 4500]);
+    expect((await db.query<{ n: number }>("select redeem_voucher_for('share', 'hash-share-v3', $1, 4500, '2026-11-08') as n", [a])).rows[0].n).toBe(0);
+    await expect(db.query("update private_guests set voucher_id = 'c2000000-0000-4000-8000-000000000003' where id = $1", [a])).rejects.toThrow();
+    const free = async (g: string) => (await db.query<{ ok: boolean }>("select mark_share_paid_free($1) as ok", [g])).rows[0].ok;
+    expect(await free(a)).toBe(true);
+    expect(await free(a)).toBe(false);
+    expect(await free(b)).toBe(false); // nothing applied, still owes 45
+    expect((await guestRow(a)).status).toBe("paid");
+    const left = async () => (await db.query<{ n: number }>("select credits_left as n from class_passes where code_hash = 'hash-share-pass'")).rows[0].n;
+    expect(await left()).toBe(2);
+    expect((await db.query<{ n: number }>("select return_pass_share($1, '2026-11-08') as n", [a])).rows[0].n).toBe(1);
+    expect((await db.query<{ n: number }>("select return_pass_share($1, '2026-11-08') as n", [a])).rows[0].n).toBe(0);
+    expect(await left()).toBe(3);
+    await expect(db.query("update private_guests set voucher_applied_cents = 9000 where id = $1", [b])).rejects.toThrow();
+  });
+
+  it("cancels some seats once, frees them, and returns pass credits and voucher money", async () => {
+    const BOOKING = "c4000000-0000-4000-8000-000000000001";
+    await db.query("insert into class_sessions (id, class_type_id, date, start_time, seats, booked) values ($1, 'class-florals', '2027-02-06', '14:00', 8, 4)", [SESSION]);
+    await pass("c3000000-0000-4000-8000-000000000002", "hash-seat-pass", 3);
+    await voucher("c2000000-0000-4000-8000-000000000004", "hash-seat-v", 10000);
+    const guests = JSON.stringify([1, 2, 3, 4].map((i) => ({ name: `G${i}`, allergies: "", checkedIn: false })));
+    await db.query(
+      `insert into class_bookings (id, reference, token_hash, session_id, seats, guests, contact_name, email, phone, unit_price_cents, discount_cents, total_cents, amount_paid_cents, status, terms_accepted_at)
+       values ($1, 'CLS-PART1', 'hash-part-1', $2, 4, $3::jsonb, 'Ann', 'ann@example.com', '0400000000', 9500, 0, 19000, 9000, 'paid', now())`,
+      [BOOKING, SESSION, guests],
+    );
+    expect((await db.query<{ n: number }>("select redeem_pass('hash-seat-pass', $1, 2, '2026-11-08') as n", [BOOKING])).rows[0].n).toBe(2);
+    expect((await db.query<{ n: number }>("select redeem_voucher_for('booking', 'hash-seat-v', $1, 10000, '2026-11-08') as n", [BOOKING])).rows[0].n).toBe(10000);
+
+    const cancel = (expected: number, guestsLeft: number) =>
+      db.query<{ ok: boolean }>(
+        "select partial_cancel_booking($1, $2, $3::jsonb, 0, 9500, 0, 2000, 1, '2026-11-08', '{\"seats\":1}'::jsonb) as ok",
+        [BOOKING, expected, JSON.stringify(Array.from({ length: guestsLeft }, (_, i) => ({ name: `G${i + 1}`, allergies: "", checkedIn: false })))],
+      );
+    const both = await Promise.all([cancel(4, 3), cancel(4, 3)]);
+    expect(both.map((r) => r.rows[0].ok).sort()).toEqual([false, true]);
+    const b = (await db.query<{ seats: number; pass_credits: number; voucher_applied_cents: number; partial_cancellations: unknown[] }>("select seats, pass_credits, voucher_applied_cents, partial_cancellations from class_bookings where id = $1", [BOOKING])).rows[0];
+    expect(b).toMatchObject({ seats: 3, pass_credits: 1, voucher_applied_cents: 8000 });
+    expect(b.partial_cancellations).toHaveLength(1);
+    expect((await db.query<{ n: number }>("select booked as n from class_sessions where id = $1", [SESSION])).rows[0].n).toBe(3);
+    expect((await db.query<{ n: number }>("select credits_left as n from class_passes where code_hash = 'hash-seat-pass'")).rows[0].n).toBe(2);
+    // A later full cancel returns only what's still on the booking.
+    expect((await db.query<{ amount: number }>("select * from return_voucher_for('booking', $1, '2026-11-08')", [BOOKING])).rows[0].amount).toBe(8000);
+    // Can't cancel every seat, or take more than was paid.
+    expect((await cancel(3, 0)).rows[0].ok).toBe(false);
+    expect((await db.query<{ ok: boolean }>("select partial_cancel_booking($1, 3, $2::jsonb, 0, 9500, 99999, 0, 0, '2026-11-08', '{}'::jsonb) as ok", [BOOKING, JSON.stringify([{ name: "G1" }])])).rows[0].ok).toBe(false);
+  });
+});

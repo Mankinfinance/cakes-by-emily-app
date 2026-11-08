@@ -2,12 +2,13 @@
 
 A mobile-first website where customers design a custom cake, see the price as they go, pick a date and a 30 minute pickup time, and pay a deposit through Stripe. Emily runs everything from a private admin area: orders, progress updates with photos and videos, prices, what's shown on the menu, capacity, days off and peak dates.
 
-This covers **phases 1 to 4** of the plan:
+This covers **phases 1 to 5** of the plan:
 
 1. Ordering and payments.
 2. The time-savers (automatic messages, design approval, a waitlist, a kitchen sheet, change or cancel under Emily's terms), seasonal boxes and gift vouchers.
 3. Corporate packages, reviews, referrals and a stamp card, party add-ons, a sales snapshot, and Cake and Sip classes with private group bookings.
 4. Split payments and guest details for private classes, class photo galleries, a 3-class pass, vouchers on everything, customers cancelling their own class bookings, and optional automatic Stripe refunds.
+5. Guests changing their own details, codes on guests' shares, cancelling some seats of a class booking, automatic refunds of late payments, and launch tools: a setup health page (`/admin/setup`) and a live smoke test.
 
 What's left is listed under [Future work](#future-work).
 
@@ -148,7 +149,7 @@ Every variable is listed and explained in [`.env.example`](.env.example). Never 
 
 1. Work through the pre-launch checklist below.
 2. Replace the sample prices and settings in `/admin`.
-3. Place a few real test orders end to end in Stripe test mode (use Stripe's test card 4242 4242 4242 4242).
+3. Open `/admin/setup` and fix anything red, then follow [First live test](#first-live-test) in Stripe test mode.
 4. In Stripe, switch to live mode, create a **live** webhook endpoint, and swap `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in Vercel for the live values. Redeploy.
 5. Place one small real order and refund it to confirm everything works.
 
@@ -190,14 +191,77 @@ From the plan doc, "Checks before taking real orders". These are things to confi
 
 **New settings** (in `/admin/settings`): class full refund days (7), class credit days (3), shares due days before a private class (7), sell class passes (on), pass price ($255), classes per pass (3), pass valid months (12), and automatic refunds (off).
 
+## Phase 5
+
+**Guests change their own details.** From their own guest link, a private class guest can change their name, email, allergies, dietary needs and email opt-in until a cut-off (2 days before the class, the setting "Guests can change their details until"). From then on the page tells them to message Emily. If the allergy or dietary details change, Emily is emailed straight away with the before and after.
+
+**Codes on a guest's own share.** On their guest page, a guest can enter a gift voucher, a credit code or a 3-class pass code. One code per share, taken in one database step, and never while that share is mid-checkout. A voucher or credit code takes up to what the share still owes (the voucher keeps any balance). **One class pass credit is worth what a credit cost** (the pass price divided by the classes per pass, $85 with the sample settings) because private class shares are priced by package, not per seat. If a code covers the whole share, it is marked paid with no checkout and the organiser's tracker updates. If Emily cancels the private class, every voucher and pass credit used on a share comes back.
+
+**Cancelling some seats.** On their ticket, a customer can tick the guests who can't come, see the new price and what comes back before confirming, then cancel just those seats. How it's worked out:
+
+- The price is worked out again for the seats left, so the group discount drops away if the booking falls below the threshold (4 seats at 10% off, $342, cancelling 1 leaves 3 at $285: $57 back).
+- Class pass credits cover seats first, so cancelled seats give credits back before any money.
+- Money comes back cash first, then any voucher that paid (as a new credit code).
+- 7 or more days before: the cash is refunded. 3 to 6 days: it becomes a credit code. Under 3 days: seats can't be cancelled online (customers can still cancel the whole booking under the class terms, or message Emily).
+- At least one seat must stay; cancelling every seat is the whole-booking button.
+- Done in one database step that checks the booking hasn't changed since the quote, so two cancels at once can't both apply.
+- The freed seats are offered to the class waitlist, the customer gets an updated ticket email, and Emily gets an alert (with "refund $X in Stripe" when automatic refunds are off). The ticket keeps a history of what was cancelled.
+
+**Late payments refunded automatically.** A payment can arrive after its order or booking expired (someone sat on Stripe's page past the hold, or a guest's share hold ran out and someone else paid that share). With automatic refunds on, it is refunded in full through Stripe straight away, with a stable idempotency key so a retried webhook never refunds twice, and Emily gets a "Late payment refunded" email. With them off, or if Stripe refuses, Emily gets the same "refund it in the Stripe dashboard" email as before.
+
+**Setup page (`/admin/setup`).** Admin only, behind two-factor. Green, amber and red checks with plain-English fixes:
+
+- every required environment variable: secrets show only "set" or "missing", addresses show the host only
+- the site address matches the page you're on
+- Supabase answers, every expected table exists (it names the migration to run if not), the phase 5 migration has been run, and the photo storage bucket exists
+- the Stripe key's mode (test or live, from its prefix) and a light "who am I" call to Stripe
+- the webhook secret is there and looks right
+- Resend is set, with a "Send a test email to ADMIN_NOTIFY_EMAIL" button
+- the reminders job secret is set, the order link secret is at least 32 characters, and two-factor is required
+
+On the local test mode it shows a "test mode" banner. It only reads: nothing is changed by opening it.
+
+**Live smoke test (`npm run smoke:live`).** Run from your own computer against the deployed site, in Stripe test mode only:
+
+```bash
+SMOKE_BASE_URL=https://your-site.vercel.app \
+STRIPE_SECRET_KEY=sk_test_... \
+SMOKE_CONFIRM=yes \
+npm run smoke:live
+```
+
+It refuses to run unless the key starts with `sk_test_` and `SMOKE_CONFIRM=yes`. It checks the site answers, finds a normal date and slot, places one order marked `[SMOKE TEST]` through the public API, prints the Stripe test checkout link for you to pay (Stripe doesn't let a script pay a Checkout page itself; `SMOKE_WAIT_MINUTES` sets how long it waits, default 10), checks the webhook marked the order paid, checks the order link works and an altered link doesn't, then cancels the order (its own clean up) and checks whether Stripe made a refund. It ends with a PASS/FAIL table. The cancelled test order stays visible in the admin marked `[SMOKE TEST]`; if automatic refunds are off, refund the test payment in the Stripe dashboard. Its pure parts are unit tested; the script itself has not been run against a live site from here.
+
+**New setting:** guests can change their details until 2 days before the class (`guestEditCutoffDays`). **New migration:** `supabase/migrations/20261112000000_phase5.sql`. Run it in the Supabase SQL editor after the phase 4 one.
+
+## First live test
+
+Do this in **Stripe test mode** before switching to live payments.
+
+1. Deploy to Vercel with the test keys, run all five migrations and the seed in Supabase, and add the webhook endpoint (`https://<your site>/api/stripe/webhook`) with the events `checkout.session.completed`, `checkout.session.async_payment_succeeded` and `charge.refunded`.
+2. Open `/admin/setup`. Fix every red line. Amber is fine for now: the Stripe key will say "test mode", which is what you want.
+3. Click "Send a test email" and check it arrives (look in spam too).
+4. Place a real order on the site and pay with Stripe's test cards (any future expiry date, any 3 digit CVC, any postcode):
+
+   | Card | What happens |
+   |---|---|
+   | 4242 4242 4242 4242 | Payment succeeds |
+   | 4000 0000 0000 9995 | Declined: the order stays unpaid, and the daily job releases its slot |
+   | 4000 0025 0000 3155 | Asks for authentication (3D Secure): complete it to pay, or fail it to see the decline |
+
+5. Check the order page shows the deposit as paid within a minute, Emily gets the new order email, and the order appears in `/admin`.
+6. Cancel it from the admin. With automatic refunds off, refund it in the Stripe dashboard; with them on, check the refund appears in Stripe.
+7. Optionally run `npm run smoke:live` (above) for a repeatable check.
+
+**If a payment doesn't show as paid:** in Stripe, open Developers, Webhooks, your endpoint, and look at the event deliveries. A red delivery shows the error. Fix it (usually a wrong `STRIPE_WEBHOOK_SECRET` or the endpoint URL), then press **Resend** on that event; the site handles each event once, so resending is safe. With the Stripe CLI you can also forward events to a local copy (`stripe listen --forward-to localhost:3000/api/stripe/webhook`) or replay one (`stripe events resend evt_...`).
+
 ## Future work
 
 Not built yet, on purpose:
 
-- Guests editing their details after saving them (today they message Emily).
-- Pass and voucher codes on private class shares.
-- Partial cancellation (fewer seats) of a class booking.
-- Automatic refunds for late payments that arrive after an order has expired (Emily is emailed to refund them by hand).
+- Partial cancellation of private classes (fewer guests after the deposit).
+- Saving the automatic refund id onto a partial seat cancellation record (it is kept in the refunds table and shown in Stripe).
+- Running the live smoke test unattended: Stripe Checkout has to be paid by a person.
 
 ## For developers
 
@@ -217,4 +281,4 @@ npm run build       # production build
 - `supabase/migrations`: the database schema, Row Level Security, and the functions that must be exact: recording a payment once, taking box stock, and using or giving back voucher balance. Add changes as **new** files; never edit one that may already have been run.
 - The site name ("Layered by Cakes by Emily") and business details live in `src/lib/config.ts`.
 
-**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, guest places and share holds, pass credits, voucher redemption and returns on every kind of order, refund totals, stamp card claims, referral rules, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout (and pretend refunds). **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).
+**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, guest places and share holds, pass credits, voucher redemption and returns on every kind of order, refund totals, stamp card claims, referral rules, codes on guests' shares, partial seat cancellations, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout (and pretend refunds). **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch: `/admin/setup`, then [First live test](#first-live-test).

@@ -175,6 +175,10 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
             <span className="label">Private class shares due (days before)</span>
             <input type="number" min={0} className="field" {...num("splitDueDays")} />
           </label>
+          <label>
+            <span className="label">Guests can change their details until (days before)</span>
+            <input type="number" min={0} max={60} className="field" {...num("guestEditCutoffDays")} data-testid="guest-edit-cutoff" />
+          </label>
           <label className="flex items-center gap-2 sm:col-span-2 lg:col-span-3">
             <input type="checkbox" checked={s.passEnabled} onChange={(e) => setS({ ...s, passEnabled: e.target.checked })} />
             <span>Sell class passes</span>
