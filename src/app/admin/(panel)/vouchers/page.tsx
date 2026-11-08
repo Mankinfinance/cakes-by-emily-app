@@ -9,7 +9,7 @@ import { VoucherSettings } from "./VoucherSettings";
 export default async function VouchersPage() {
   await requireAdmin();
   const repo = await getRepo();
-  const [vouchers, settings] = await Promise.all([repo.listVouchers(), repo.getSettings()]);
+  const [vouchers, settings, passes] = await Promise.all([repo.listVouchers(), repo.getSettings(), repo.listPasses()]);
   const today = todayInBusinessTz();
   const live = vouchers.filter((v) => v.status === "active" && v.expiresOn >= today);
   const outstanding = live.reduce((s, v) => s + v.balanceCents, 0);
@@ -24,6 +24,25 @@ export default async function VouchersPage() {
         <p className="mt-2 font-semibold" data-testid="outstanding">Outstanding balance: {formatAud(outstanding)}</p>
       </div>
       <VoucherSettings settings={settings} />
+      <section className="card p-5">
+        <h2 className="font-serif text-xl">Class passes</h2>
+        {passes.length === 0 ? (
+          <p className="mt-2 text-sm text-muted">None sold yet.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-line text-sm" data-testid="pass-list">
+            {passes.map((p) => (
+              <li key={p.id} className="flex flex-wrap justify-between gap-2 py-2">
+                <span>
+                  <span className="font-mono">...{p.codeLast4}</span> {p.buyerName} ({p.buyerEmail})
+                </span>
+                <span className="text-muted">
+                  {p.status === "pending" ? "Unpaid" : `${p.creditsLeft} of ${p.creditsTotal} left`}, expires {formatDateLong(p.expiresOn)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <section className="card p-5">
         <h2 className="font-serif text-xl">All codes</h2>
         {vouchers.length === 0 ? (

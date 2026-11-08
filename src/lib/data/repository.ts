@@ -7,17 +7,24 @@ import type {
   BoxOrder,
   CatalogueItem,
   ClassBooking,
+  ClassPass,
+  ClassPhoto,
   ClassSession,
   ClassType,
   CorporateOrder,
   CorporatePackage,
+  PrivateGuest,
   PrivateRequest,
+  RefundRecord,
+  RefundTargetKind,
   Referral,
   ReferralCode,
   Review,
   DayOff,
   Order,
   OrderUpdate,
+  PartialCancellation,
+  GuestReduction,
   Payment,
   PeakDate,
   SeasonalBox,
@@ -86,7 +93,7 @@ export type NewVoucher = Omit<Voucher, "createdAt">;
 export type NewWaitlistEntry = Omit<WaitlistEntry, "id" | "createdAt" | "status" | "offerTokenHash" | "offeredAt" | "offerExpiresAt" | "orderId">;
 export type NewCorporateOrder = Omit<CorporateOrder, "createdAt" | "amountPaidCents" | "status" | "kitchenDone">;
 export type NewClassBooking = Omit<ClassBooking, "createdAt" | "amountPaidCents" | "status" | "cancellation">;
-export type NewPrivateRequest = Omit<PrivateRequest, "createdAt" | "amountPaidCents" | "status" | "payTokenHash">;
+export type NewPrivateRequest = Omit<PrivateRequest, "createdAt" | "amountPaidCents" | "status" | "payTokenHash" | "shareTokenHash" | "lastNudgeAt" | "cancellation">;
 
 export interface Repository {
   // Catalogue and settings
@@ -247,6 +254,8 @@ export interface Repository {
   updateBookingGuests(id: string, guests: ClassBooking["guests"]): Promise<void>;
   /** Cancel once and give the seats back. */
   cancelBookingOnce(id: string, onlyUnpaid: boolean, record: ClassBooking["cancellation"]): Promise<boolean>;
+  /** Update the cancellation record (for example after refunds went through Stripe). */
+  setBookingCancellation(id: string, record: ClassBooking["cancellation"]): Promise<void>;
   claimBookingMessage(bookingId: string, key: string): Promise<boolean>;
   releaseBookingMessage(bookingId: string, key: string): Promise<void>;
   createPrivateRequest(r: NewPrivateRequest): Promise<PrivateRequest>;
@@ -258,4 +267,115 @@ export interface Repository {
 
   // Sales snapshot (money and counts for orders booked between two Sydney dates)
   salesSummary(from: string, to: string): Promise<SalesSummary>;
+
+  // Phase 4 -----------------------------------------------------------------
+  // Split payments and guest details for private classes
+  setPrivateShareToken(id: string, tokenHash: string): Promise<boolean>;
+  getPrivateRequestByShareHash(hash: string): Promise<PrivateRequest | null>;
+  /** Only if the last nudge was before `before` (or never): records `now` and returns true. */
+  claimNudge(id: string, before: string, now: string): Promise<boolean>;
+  cancelPrivateOnce(id: string, record: PrivateRequest["cancellation"]): Promise<boolean>;
+  createGuestSlots(requestId: string, shares: number[]): Promise<void>;
+  listGuests(requestId: string): Promise<PrivateGuest[]>;
+  getGuest(id: string): Promise<PrivateGuest | null>;
+  /** A guest adds their details to the first empty place. Null if every place is taken. */
+  claimGuestSlot(requestId: string, d: Pick<PrivateGuest, "name" | "email" | "allergies" | "dietary" | "messageOptIn">): Promise<string | null>;
+  updateGuestDetails(id: string, d: Pick<PrivateGuest, "name" | "email" | "allergies" | "dietary" | "messageOptIn">): Promise<void>;
+  /** Hold places for one checkout, all or nothing. */
+  holdShares(ids: string[], holdKey: string, until: string): Promise<boolean>;
+
+  // Class photo galleries
+  addClassPhoto(p: Omit<ClassPhoto, "createdAt">): Promise<ClassPhoto>;
+  listClassPhotos(sessionId: string): Promise<ClassPhoto[]>;
+  getClassPhoto(id: string): Promise<ClassPhoto | null>;
+  deleteClassPhoto(id: string): Promise<void>;
+
+  // Class passes
+  createPass(p: Omit<ClassPass, "createdAt">): Promise<ClassPass>;
+  getPassById(id: string): Promise<ClassPass | null>;
+  getPassByCodeHash(hash: string): Promise<ClassPass | null>;
+  listPasses(): Promise<ClassPass[]>;
+  /** Atomically use up to max credits on a booking (once per booking). Returns the credits used. */
+  redeemPass(codeHash: string, bookingId: string, max: number, today: string): Promise<number>;
+  /** Give a booking's pass credits back, once. */
+  returnPass(bookingId: string, today: string): Promise<number>;
+  /** Class bookings: set the price after pass credits (before payment). */
+  updateBookingPrice(id: string, p: { discountCents: number; totalCents: number }): Promise<void>;
+  /** awaiting_payment -> paid with nothing to pay (a pass or voucher covered it). */
+  markBookingPaidWithoutPayment(id: string): Promise<boolean>;
+  markBoxPaidWithoutPayment(id: string): Promise<boolean>;
+
+  // Vouchers on boxes, corporate orders and class bookings
+  redeemVoucherFor(kind: VoucherTargetKind, codeHash: string, targetId: string, maxCents: number, today: string): Promise<number>;
+  returnVoucherFor(kind: VoucherTargetKind, targetId: string, today: string): Promise<{ amount: number; toVoucher: boolean }>;
+
+  // Refunds
+  setPaymentIntent(sessionId: string, intentId: string): Promise<void>;
+  /** Paid payments for one thing (an order, box order, booking...). */
+  listPaidPayments(kind: RefundTargetKind, id: string): Promise<Payment[]>;
+  /** Record a refund attempt; a success also adds to the payment's refunded total. */
+  recordRefund(r: Omit<RefundRecord, "id" | "createdAt">): Promise<void>;
+  listRefunds(paymentIds: string[]): Promise<RefundRecord[]>;
+  /** Stripe's charge.refunded event, once per event. */
+  recordChargeRefunded(eventId: string, intentId: string, amountRefunded: number): Promise<boolean>;
+
+  // Stamp card
+  /** Claim the next unused reward (1..earned) for an order. Returns its number, or 0. */
+  claimStampReward(email: string, earned: number, orderId: string): Promise<number>;
+  releaseStampReward(orderId: string): Promise<void>;
+  countStampRewards(email: string): Promise<number>;
+
+  // Phase 5 -----------------------------------------------------------------
+  /** One class pass credit on a guest's share, worth up to valueCents. Returns the cents applied, or 0. */
+  redeemPassShare(codeHash: string, guestId: string, valueCents: number, today: string): Promise<number>;
+  /** Give a share's pass credit back, once. */
+  returnPassShare(guestId: string, today: string): Promise<number>;
+  /** A share fully covered by a code: open -> paid with no payment, once. */
+  markSharePaidFree(guestId: string): Promise<boolean>;
+  /** Cancel some seats of a paid booking in one step. False if the booking changed since the quote. */
+  partialCancelBooking(p: PartialCancelWrite): Promise<boolean>;
+  /** Save the automatic Stripe refund onto a partial seat cancellation record (matched by its time). */
+  recordPartialCancelRefund(bookingId: string, at: string, refundedCents: number, refundIds: string[]): Promise<void>;
+  /** Lower a private class's guest numbers in one step. False if anything changed since the quote. */
+  reducePrivateGuests(w: ReduceGuestsWrite): Promise<boolean>;
+  /** Save the automatic Stripe refund onto a guest reduction record (matched by its time). */
+  recordReductionRefund(requestId: string, at: string, refundedCents: number, refundIds: string[]): Promise<void>;
+}
+
+export interface ReduceGuestsWrite {
+  requestId: string;
+  /** Guest numbers when the quote was made. */
+  expectedGuests: number;
+  newGuests: number;
+  newEstimateCents: number;
+  /** Unpaid places to remove (must still be unpaid and not mid-checkout). */
+  removeOpenIds: string[];
+  /** Paid places to remove (must still be paid). */
+  removePaidIds: string[];
+  /** New share amounts for the places still to pay. */
+  shareUpdates: { id: string; shareCents: number }[];
+  /** Places whose new share is fully covered: marked paid with nothing to pay. */
+  freeIds: string[];
+  /** Money taken off what the booking has been paid (refunded or turned into credit). */
+  cashOutCents: number;
+  record: GuestReduction;
+}
+
+/** What vouchers and credit codes can be used on (besides cake orders). */
+export type VoucherTargetKind = "box" | "corporate" | "booking" | "share";
+
+export interface PartialCancelWrite {
+  bookingId: string;
+  /** The seats the booking had when the quote was made. */
+  expectedSeats: number;
+  guests: ClassBooking["guests"];
+  discountCents: number;
+  totalCents: number;
+  /** Cash taken off what was paid (refunded or turned into credit). */
+  cashOutCents: number;
+  /** Voucher money taken off the booking (given back as a credit code). */
+  voucherOutCents: number;
+  passCreditsBack: number;
+  today: string;
+  record: PartialCancellation;
 }

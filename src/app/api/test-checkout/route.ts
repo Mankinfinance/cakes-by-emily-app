@@ -18,6 +18,6 @@ export async function POST(request: Request) {
     // keep default
   }
   if (!session.startsWith("cs_fake_")) return new Response("Bad session", { status: 400 });
-  await handlePaidSession(await lightDeps(request), `evt_test_${session}`, session);
+  await handlePaidSession(await lightDeps(request), `evt_test_${session}`, session, `pi_fake_${session.slice(8)}`);
   return NextResponse.redirect(next, 303);
 }

@@ -15,9 +15,18 @@ export interface CheckoutRequest {
   cancelUrl: string;
 }
 
+export interface RefundRequest {
+  paymentIntent: string;
+  amountCents: number;
+  idempotencyKey: string;
+  reason: string;
+}
+
 export interface PaymentsGateway {
   readonly mode: "stripe" | "fake";
   createCheckout(req: CheckoutRequest): Promise<{ id: string; url: string }>;
+  /** Refund part or all of a payment. Throws if Stripe refuses. */
+  refund(req: RefundRequest): Promise<{ id: string }>;
 }
 
 let stripeClient: Stripe | null = null;
@@ -59,6 +68,14 @@ export const stripeGateway: PaymentsGateway = {
     if (!session.url) throw new Error("Stripe did not return a checkout URL.");
     return { id: session.id, url: session.url };
   },
+  async refund(req) {
+    const refund = await stripe().refunds.create(
+      { payment_intent: req.paymentIntent, amount: req.amountCents, metadata: { reason: req.reason.slice(0, 200) } },
+      { idempotencyKey: req.idempotencyKey },
+    );
+    if (refund.status === "failed" || refund.status === "canceled") throw new Error(`Stripe refund ${refund.status}`);
+    return { id: refund.id };
+  },
 };
 
 /**
@@ -72,6 +89,17 @@ export const fakeGateway: PaymentsGateway = {
     const url = `/checkout/test?session=${id}&amount=${req.amountCents}&next=${encodeURIComponent(req.successUrl)}`;
     return { id, url };
   },
+  async refund(req) {
+    // Same key, same refund: mirrors Stripe's idempotency keys.
+    const g = globalThis as unknown as { __fakeRefunds?: Map<string, string> };
+    g.__fakeRefunds ??= new Map();
+    const existing = g.__fakeRefunds.get(req.idempotencyKey);
+    if (existing) return { id: existing };
+    if (!req.paymentIntent.startsWith("pi_fake_")) throw new Error("Unknown payment");
+    const id = `re_fake_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+    g.__fakeRefunds.set(req.idempotencyKey, id);
+    return { id };
+  },
 };
 
 export function fakePaymentsAllowed(): boolean {
@@ -82,4 +110,13 @@ export function getPayments(): PaymentsGateway {
   if (process.env.STRIPE_SECRET_KEY) return stripeGateway;
   if (fakePaymentsAllowed()) return fakeGateway;
   throw new Error("STRIPE_SECRET_KEY is not set.");
+}
+
+/** The gateway if one is available, or null (refunds then fall back to manual). */
+export function tryGetPayments(): PaymentsGateway | null {
+  try {
+    return getPayments();
+  } catch {
+    return null;
+  }
 }

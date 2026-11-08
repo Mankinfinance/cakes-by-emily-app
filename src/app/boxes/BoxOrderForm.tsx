@@ -18,7 +18,7 @@ interface Props {
 
 export function BoxOrderForm({ box, status, today, slots, closedWeekdays, daysOff }: Props) {
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ quantity: 1, pickupDate: "", pickupSlot: "", customerName: "", email: "", phone: "", marketingOptIn: false, acceptTerms: false });
+  const [f, setF] = useState({ quantity: 1, pickupDate: "", pickupSlot: "", customerName: "", email: "", phone: "", marketingOptIn: false, acceptTerms: false, voucherCode: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const orderable = status.state === "open";
@@ -92,6 +92,7 @@ export function BoxOrderForm({ box, status, today, slots, closedWeekdays, daysOf
             <input className="field" type="email" placeholder="Email" aria-label="Email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} data-testid="box-email" />
             <input className="field" type="tel" placeholder="Mobile" aria-label="Mobile" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} data-testid="box-phone" />
           </div>
+          <input className="field uppercase" placeholder="Gift voucher or credit code (optional)" aria-label="Voucher code" value={f.voucherCode} onChange={(e) => setF({ ...f, voucherCode: e.target.value })} data-testid="box-voucher" />
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={f.acceptTerms} onChange={(e) => setF({ ...f, acceptTerms: e.target.checked })} data-testid="box-terms" />
             <span>

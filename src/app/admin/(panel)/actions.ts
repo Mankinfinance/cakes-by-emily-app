@@ -9,8 +9,13 @@ import { getRepo } from "@/lib/data";
 import type { UploadTarget } from "@/lib/data/repository";
 import { canSetVisibility } from "@/lib/domain/visibility";
 import { getMailer } from "@/lib/services/email";
+import { tryGetPayments } from "@/lib/services/payments";
+import { cancelBoxByEmily } from "@/lib/services/boxes";
+import { cancelCorporate } from "@/lib/services/corporate";
 import { AUTOMATION_KEYS } from "@/lib/domain/types";
 import { cancelWithTerms, sendForApproval } from "@/lib/services/changes";
+import { acceptPrivate, cancelBooking, cancelClass, cancelPrivate, createSeries, declinePrivate, previewSeries, setCheckIn } from "@/lib/services/classes";
+import { emailGallery, removeClassPhoto, uploadClassPhoto } from "@/lib/services/gallery";
 import {
   advanceStage,
   finishVideoUpload,
@@ -25,6 +30,7 @@ import {
   newCatalogueItemSchema,
   peakDateSchema,
   seasonalBoxSchema,
+  seriesSchema,
   settingsSchema,
 } from "@/lib/validation";
 
@@ -33,7 +39,7 @@ export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; 
 const uuid = z.string().uuid();
 
 async function deps() {
-  return { repo: await getRepo(), mailer: getMailer(), baseUrl: siteUrl() };
+  return { repo: await getRepo(), mailer: getMailer(), baseUrl: siteUrl(), payments: tryGetPayments() };
 }
 
 function fail(err: unknown): { ok: false; error: string } {
@@ -304,8 +310,8 @@ export async function boxOrderAction(id: string, action: "collected" | "cancel")
     if (action === "collected") {
       if (bo.status !== "paid") return { ok: false, error: "Only paid pre-orders can be marked collected." };
       await repo.updateBoxOrder(bo.id, { status: "collected" });
-    } else if (!(await repo.cancelBoxOrder(bo.id, false))) {
-      return { ok: false, error: "This pre-order can't be cancelled." };
+    } else {
+      await cancelBoxByEmily(await deps(), bo.id);
     }
     revalidatePath("/admin/boxes");
     return { ok: true };
@@ -323,4 +329,206 @@ export async function voidVoucherAction(id: string): Promise<ActionResult> {
   } catch (err) {
     return fail(err);
   }
+}
+
+// Phase 3 ---------------------------------------------------------------------
+
+export async function updateCorporatePackageAction(id: string, input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const patch = z
+      .object({ name: z.string().trim().min(1).max(80).optional(), priceCents: z.number().int().min(0).max(1_000_000).optional(), visible: z.boolean().optional() })
+      .parse(input);
+    await (await getRepo()).updateCorporatePackage(z.string().regex(/^[a-z0-9-]{1,60}$/).parse(id), patch);
+    revalidatePath("/admin/corporate");
+    revalidatePath("/corporate");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function corporateStatusAction(id: string, action: "ready" | "collected" | "cancel"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const ok =
+      action === "ready"
+        ? await repo.setCorporateStatus(uuid.parse(id), "ready", ["confirmed"])
+        : action === "collected"
+          ? await repo.setCorporateStatus(uuid.parse(id), "collected", ["confirmed", "ready"])
+          : (await cancelCorporate(await deps(), uuid.parse(id)), true);
+    if (!ok) return { ok: false, error: "That change isn't possible for this order now." };
+    revalidatePath("/admin/corporate");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function reviewStatusAction(id: string, status: "approved" | "hidden" | "pending"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const review = (await repo.listReviews()).find((r) => r.id === uuid.parse(id));
+    if (!review) return { ok: false, error: "Review not found." };
+    if (status === "approved" && !review.consentToPublish) return { ok: false, error: "This customer didn't agree to their review being published." };
+    await repo.setReviewStatus(review.id, status);
+    revalidatePath("/admin/reviews");
+    revalidatePath("/");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function updateClassTypeAction(id: string, input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const patch = z
+      .object({ priceCents: z.number().int().min(0).max(100_000).optional(), visible: z.boolean().optional(), minGuests: z.number().int().min(1).max(50).optional() })
+      .parse(input);
+    await (await getRepo()).updateClassType(z.string().regex(/^[a-z0-9-]{1,60}$/).parse(id), patch);
+    revalidatePath("/admin/classes");
+    revalidatePath("/classes");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function seriesAction(input: unknown, create: boolean): Promise<ActionResult<{ dates: { date: string; skipped: boolean }[] }>> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const parsed = seriesSchema.parse(input);
+    const dates = await previewSeries(repo, parsed);
+    if (create) {
+      await createSeries({ repo }, parsed);
+      revalidatePath("/admin/classes");
+      revalidatePath("/classes");
+    }
+    return { ok: true, data: { dates } };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function sessionSeatsAction(id: string, seats: number): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const s = await repo.getSession(uuid.parse(id));
+    if (!s) return { ok: false, error: "Class not found." };
+    const n = z.number().int().min(1).max(50).parse(seats);
+    if (n < s.booked) return { ok: false, error: `${s.booked} seats are already booked.` };
+    await repo.updateSession(s.id, { seats: n });
+    revalidatePath(`/admin/classes/${s.id}`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelClassAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelClass(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelBookingAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelBooking(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function checkInAction(bookingId: string, guestIndex: number, checkedIn: boolean): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await setCheckIn(await getRepo(), uuid.parse(bookingId), z.number().int().min(0).max(5).parse(guestIndex), z.boolean().parse(checkedIn));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function privateAction(id: string, action: "accept" | "decline"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    if (action === "accept") await acceptPrivate(await deps(), uuid.parse(id));
+    else await declinePrivate(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes/private");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Phase 4 ---------------------------------------------------------------------
+
+export async function uploadClassPhotoAction(form: FormData): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const sessionId = uuid.parse(form.get("sessionId"));
+    const caption = z.string().max(200).parse(form.get("caption") ?? "");
+    const file = form.get("photo");
+    if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Choose a photo." };
+    if (file.size > MAX_PHOTO_BYTES) return { ok: false, error: "Photos must be under 4 MB." };
+    await uploadClassPhoto(await deps(), sessionId, { bytes: new Uint8Array(await file.arrayBuffer()), contentType: file.type }, caption);
+    revalidatePath(`/admin/classes/${sessionId}`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function deleteClassPhotoAction(photoId: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await removeClassPhoto(await deps(), uuid.parse(photoId));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function emailGalleryAction(sessionId: string): Promise<ActionResult<{ sent: number }>> {
+  await requireAdmin();
+  try {
+    return { ok: true, data: { sent: await emailGallery(await deps(), uuid.parse(sessionId)) } };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelPrivateAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelPrivate(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes/private");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Phase 5 -------------------------------------------------------------------
+
+export async function sendSetupTestEmailAction(): Promise<ActionResult<{ to: string }>> {
+  await requireAdmin();
+  const { sendSetupTestEmail } = await import("@/lib/services/setup");
+  const r = await sendSetupTestEmail();
+  return "error" in r ? { ok: false, error: r.error } : { ok: true, data: { to: r.to } };
 }

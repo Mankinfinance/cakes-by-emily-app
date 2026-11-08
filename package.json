@@ -10,7 +10,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test --trace off",
-    "seed:sql": "tsx scripts/write-seed.ts"
+    "seed:sql": "tsx scripts/write-seed.ts",
+    "smoke:live": "tsx scripts/smoke-live.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

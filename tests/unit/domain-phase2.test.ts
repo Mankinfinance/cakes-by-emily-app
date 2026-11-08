@@ -55,6 +55,8 @@ function order(over: Partial<Order> = {}): Order {
     waitlistId: null,
     kitchenDone: false,
     cancellation: null,
+    referralCode: null,
+    stampReward: false,
     ...over,
   };
 }

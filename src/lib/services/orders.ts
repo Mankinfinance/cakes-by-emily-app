@@ -14,6 +14,7 @@ import { looksLikeCode, VOUCHER_PROBLEM_TEXT, voucherProblem } from "../domain/v
 import type { OrderRequest } from "../validation";
 import { checkUpload, IMAGE_TYPES, magicMatches, MAX_PHOTO_BYTES, MAX_VIDEO_BYTES, VIDEO_TYPES } from "../validation";
 import { calendarContext } from "./calendar";
+import { handleLatePayment } from "./late-payments";
 import { adminEmail, adminLink, boxLink, corporateLink, nowOf, OrderError, orderLink, type Deps, type LightDeps } from "./common";
 import {
   balanceReceiptEmail,
@@ -21,7 +22,6 @@ import {
   corporateConfirmationEmail,
   boxAlertEmail,
   boxConfirmationEmail,
-  latePaymentAlertEmail,
   newOrderAlertEmail,
   photoUpdateEmail,
   sendSafely,
@@ -29,7 +29,9 @@ import {
 } from "./email";
 import { sendEventMessage } from "./messages";
 import { onClassPaid, onPrivatePaid } from "./classes";
+import { onPassPaid } from "./passes";
 import { checkReferral, rewardReferral, stampCardFor } from "./referrals";
+import { onSharePaid } from "./split";
 import { sendVoucherEmails } from "./vouchers";
 import { offerFromToken } from "./waitlist";
 import { hashCode, hashToken, newReference, orderToken } from "./tokens";
@@ -72,7 +74,6 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
   // Phase 3: a referral code for a first order, and a stamp card reward if one is due.
   const referral = req.referralCode ? await checkReferral(repo, ctx.settings, req.referralCode, req.email) : null;
   const stamps = ctx.settings.stampsEnabled ? await stampCardFor(repo, ctx.settings, req.email) : null;
-  const stampReward = Boolean(stamps && stamps.rewardsAvailable > 0);
 
   let price;
   try {
@@ -81,7 +82,6 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
       peakSurchargeCents: booking.status.peak?.surchargeCents ?? 0,
       peakLabel: booking.status.peak?.label,
       referralDiscountCents: referral ? ctx.settings.referralGiveCents : 0,
-      stampRewardName: stampReward ? ctx.settings.stampRewardName : undefined,
     });
   } catch (e) {
     if (e instanceof PricingError) throw new OrderError(e.message);
@@ -107,8 +107,25 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
     await repo.uploadMedia(inspirationPath, inspiration);
   }
 
+  // Stamp card: claim the reward atomically, so two orders at once can't both use it.
+  let stampReward = false;
+  if (stamps && stamps.rewardsAvailable > 0) {
+    stampReward = (await repo.claimStampReward(req.email, stamps.rewardsEarned, id)) > 0;
+    if (stampReward) {
+      price = priceCake(config, visibleItems(catalogue), ctx.settings, {
+        isRush: booking.status.isRush,
+        peakSurchargeCents: booking.status.peak?.surchargeCents ?? 0,
+        peakLabel: booking.status.peak?.label,
+        referralDiscountCents: referral ? ctx.settings.referralGiveCents : 0,
+        stampRewardName: ctx.settings.stampRewardName,
+      });
+    }
+  }
+
   const token = orderToken(id);
-  let order = await repo.createOrder({
+  let order: Order;
+  try {
+    order = await repo.createOrder({
     id,
     reference: newReference(),
     tokenHash: hashToken(token),
@@ -117,6 +134,7 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
     email: req.email,
     phone: req.phone,
     marketingOptIn: req.marketingOptIn,
+    photoOptOut: req.photoOptOut ?? false,
     pickupDate: req.pickupDate,
     pickupSlot: req.pickupSlot,
     config,
@@ -137,11 +155,16 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
     referralCode: referral?.code ?? null,
     stampReward,
   });
+  } catch (err) {
+    if (stampReward) await repo.releaseStampReward(id);
+    throw err;
+  }
 
   const abandon = async (message: string, status = 409): Promise<never> => {
     await repo.cancelOrderOnce(order.id, null, true);
     await repo.returnVoucher(order.id, today);
     await repo.voidReferral(order.id);
+    await repo.releaseStampReward(order.id);
     throw new OrderError(message, status);
   };
 
@@ -213,10 +236,15 @@ export async function startBalancePayment(deps: Deps, order: Order) {
 }
 
 /** Called from the Stripe webhook (and the test checkout). Safe to call twice. */
-export async function handlePaidSession(deps: LightDeps, eventId: string, sessionId: string): Promise<boolean> {
+export async function handlePaidSession(deps: LightDeps, eventId: string, sessionId: string, paymentIntent?: string | null): Promise<boolean> {
   const { repo, mailer } = deps;
   const payment = await repo.getPaymentBySession(sessionId);
   if (!payment) return false;
+  // Remember the PaymentIntent so refunds can be made against it later.
+  if (paymentIntent) {
+    await repo.setPaymentIntent(sessionId, paymentIntent);
+    payment.stripePaymentIntent ??= paymentIntent;
+  }
   const first = await repo.recordPaymentOnce(eventId, sessionId);
   if (!first) return false;
   const alertTo = adminEmail();
@@ -225,7 +253,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const order = await repo.getOrderById(payment.orderId);
     if (!order) return true;
     if (order.stage === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(order.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, order.reference, paymentIntent);
       return true;
     }
     if (payment.kind === "deposit") await onDepositSettled(deps, order);
@@ -234,7 +262,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const bo = await repo.getBoxOrderById(payment.boxOrderId);
     if (!bo) return true;
     if (bo.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(bo.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, bo.reference, paymentIntent);
       return true;
     }
     await sendSafely(mailer, boxConfirmationEmail(bo, boxLink(deps.baseUrl, bo.id)));
@@ -246,7 +274,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const c = await repo.getCorporateOrderById(payment.corporateOrderId);
     if (!c) return true;
     if (c.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(c.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, c.reference, paymentIntent);
       return true;
     }
     await sendSafely(mailer, corporateConfirmationEmail(c, corporateLink(deps.baseUrl, c.id)));
@@ -255,13 +283,22 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const b = await repo.getBookingById(payment.classBookingId);
     if (!b) return true;
     if (b.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(b.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, b.reference, paymentIntent);
       return true;
     }
     await onClassPaid(deps, b);
   } else if (payment.privateRequestId) {
     const r = await repo.getPrivateRequest(payment.privateRequestId);
-    if (r) await onPrivatePaid(deps, r);
+    if (!r) return true;
+    if (r.status === "cancelled") {
+      await handleLatePayment(deps, payment, r.reference, paymentIntent);
+      return true;
+    }
+    if (payment.kind === "private_share") await onSharePaid(deps, r, payment);
+    else await onPrivatePaid(deps, r);
+  } else if (payment.passId) {
+    const pass = await repo.getPassById(payment.passId);
+    if (pass) await onPassPaid(deps, pass);
   }
   return true;
 }

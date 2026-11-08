@@ -22,10 +22,24 @@ export async function POST(request: Request) {
     const session = event.data.object as Stripe.Checkout.Session;
     if (session.payment_status === "paid") {
       try {
-        await handlePaidSession(await lightDeps(request), event.id, session.id);
+        const intent = typeof session.payment_intent === "string" ? session.payment_intent : (session.payment_intent?.id ?? null);
+        await handlePaidSession(await lightDeps(request), event.id, session.id, intent);
       } catch (err) {
         console.error("Webhook handling failed", err);
         // A 500 makes Stripe retry later. Handling is idempotent, so retries are safe.
+        return json({ error: "Temporary failure" }, 500);
+      }
+    }
+  }
+  // Refunds (ours, or ones Emily makes in the Stripe dashboard). amount_refunded is Stripe's running total.
+  if (event.type === "charge.refunded") {
+    const charge = event.data.object as Stripe.Charge;
+    const intent = typeof charge.payment_intent === "string" ? charge.payment_intent : (charge.payment_intent?.id ?? null);
+    if (intent) {
+      try {
+        await (await lightDeps(request)).repo.recordChargeRefunded(event.id, intent, charge.amount_refunded);
+      } catch (err) {
+        console.error("Refund webhook handling failed", err);
         return json({ error: "Temporary failure" }, 500);
       }
     }

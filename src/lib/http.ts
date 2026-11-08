@@ -4,7 +4,7 @@ import { siteUrl } from "./config";
 import { getRepo } from "./data";
 import { getMailer } from "./services/email";
 import { OrderError } from "./services/orders";
-import { getPayments } from "./services/payments";
+import { getPayments, tryGetPayments } from "./services/payments";
 
 export function json(data: unknown, status = 200) {
   return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -29,6 +29,7 @@ export async function lightDeps(request?: Request) {
   return {
     repo: await getRepo(),
     mailer: getMailer(),
+    payments: tryGetPayments(),
     baseUrl: siteUrl(request ? new URL(request.url).origin : undefined),
   };
 }

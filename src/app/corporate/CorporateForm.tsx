@@ -8,7 +8,7 @@ import type { CorporatePackage } from "@/lib/domain/types";
 
 export function CorporateForm({ packages, depositPercent, minDate }: { packages: CorporatePackage[]; depositPercent: number; minDate: string }) {
   const [pkgId, setPkgId] = useState(packages[0]?.id ?? "");
-  const [f, setF] = useState({ companyName: "", abn: "", contactName: "", email: "", phone: "", notes: "", pickupDate: "", pickupSlot: "", acceptTerms: false });
+  const [f, setF] = useState({ companyName: "", abn: "", contactName: "", email: "", phone: "", notes: "", pickupDate: "", pickupSlot: "", acceptTerms: false, voucherCode: "" });
   const [slots, setSlots] = useState<{ time: string; available: boolean }[] | null>(null);
   const [slotNote, setSlotNote] = useState("");
   const [logo, setLogo] = useState<{ blob: Blob; name: string } | null>(null);
@@ -113,6 +113,7 @@ export function CorporateForm({ packages, depositPercent, minDate }: { packages:
           {logo && <span className="mt-1 block text-xs text-muted">Added: {logo.name}</span>}
         </label>
         <textarea className="field" rows={2} maxLength={1000} placeholder="Colours, wording or anything else (optional)" aria-label="Notes" value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+        <input className="field uppercase" placeholder="Gift voucher or credit code (optional)" aria-label="Voucher code" value={f.voucherCode} onChange={(e) => setF({ ...f, voucherCode: e.target.value })} data-testid="corp-voucher" />
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={f.acceptTerms} onChange={(e) => setF({ ...f, acceptTerms: e.target.checked })} data-testid="corp-terms" />
           <span>

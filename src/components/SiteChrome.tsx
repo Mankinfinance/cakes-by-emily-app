@@ -9,10 +9,13 @@ export function SiteHeader() {
           {BUSINESS.name}
         </Link>
         <nav className="flex items-center gap-4 text-sm">
-          <Link href="/boxes" className="hidden sm:inline hover:text-rose">
+          <Link href="/boxes" className="hidden lg:inline hover:text-rose">
             Seasonal boxes
           </Link>
-          <Link href="/vouchers" className="hidden sm:inline hover:text-rose">
+          <Link href="/classes" className="hidden md:inline hover:text-rose">
+            Classes
+          </Link>
+          <Link href="/vouchers" className="hidden lg:inline hover:text-rose">
             Gift vouchers
           </Link>
           <Link href="/order" className="btn btn-primary !py-2 !px-4 text-sm">
@@ -40,6 +43,12 @@ export function SiteFooter() {
           </Link>
           <Link href="/vouchers" className="hover:text-rose">
             Gift vouchers
+          </Link>
+          <Link href="/classes" className="hover:text-rose">
+            Classes
+          </Link>
+          <Link href="/corporate" className="hover:text-rose">
+            Corporate
           </Link>
           <Link href="/terms" className="hover:text-rose">
             Terms

@@ -35,6 +35,12 @@ export default async function BoxOrderPage({ params, searchParams }: PageProps<"
             <dd className="text-right">{order.quantity}</dd>
             <dt className="text-muted">Paid</dt>
             <dd className="text-right" data-testid="box-paid">{formatAud(order.amountPaidCents)}</dd>
+            {(order.voucherAppliedCents ?? 0) > 0 && (
+              <>
+                <dt className="text-muted">Voucher or credit</dt>
+                <dd className="text-right" data-testid="box-voucher-applied">{formatAud(order.voucherAppliedCents!)}</dd>
+              </>
+            )}
             <dt className="text-muted">Pickup</dt>
             <dd className="text-right">
               {formatDateLong(order.pickupDate)} at {formatTime12(order.pickupSlot)}, {BUSINESS.suburb}

@@ -10,11 +10,15 @@ import type {
   AutomationKey,
   BoxOrder,
   ClassBooking,
+  ClassPass,
+  ClassPhoto,
   ClassSession,
   ClassType,
   CorporateOrder,
   CorporatePackage,
+  PrivateGuest,
   PrivateRequest,
+  RefundRecord,
   Referral,
   Review,
   CakeConfig,
@@ -84,6 +88,7 @@ function toOrder(r: Row, items: Row[] = []): Order {
     email: r.email as string,
     phone: r.phone as string,
     marketingOptIn: r.marketing_opt_in as boolean,
+    photoOptOut: (r.photo_opt_out as boolean | undefined) ?? false,
     pickupDate: r.pickup_date as string,
     pickupSlot: r.pickup_slot as string,
     config: r.config as CakeConfig,
@@ -204,6 +209,8 @@ function toBoxOrder(r: Row): BoxOrder {
     status: r.status as BoxOrder["status"],
     kitchenDone: r.kitchen_done as boolean,
     createdAt: r.created_at as string,
+    voucherId: (r.voucher_id as string | null) ?? null,
+    voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
   };
 }
 
@@ -251,6 +258,8 @@ function toCorporate(r: Row): CorporateOrder {
     kitchenDone: r.kitchen_done as boolean,
     termsAcceptedAt: r.terms_accepted_at as string,
     createdAt: r.created_at as string,
+    voucherId: (r.voucher_id as string | null) ?? null,
+    voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
   };
 }
 
@@ -333,6 +342,11 @@ function toBooking(r: Row): ClassBooking {
     cancellation: (r.cancellation as ClassBooking["cancellation"]) ?? null,
     termsAcceptedAt: r.terms_accepted_at as string,
     createdAt: r.created_at as string,
+    passId: (r.pass_id as string | null) ?? null,
+    passCredits: (r.pass_credits as number) ?? 0,
+    voucherId: (r.voucher_id as string | null) ?? null,
+    voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
+    partialCancellations: (r.partial_cancellations as ClassBooking["partialCancellations"]) ?? [],
   };
 }
 
@@ -357,8 +371,59 @@ function toPrivate(r: Row): PrivateRequest {
     payTokenHash: (r.pay_token_hash as string | null) ?? null,
     amountPaidCents: r.amount_paid_cents as number,
     createdAt: r.created_at as string,
+    shareTokenHash: (r.share_token_hash as string | null) ?? null,
+    lastNudgeAt: (r.last_nudge_at as string | null) ?? null,
+    cancellation: (r.cancellation as PrivateRequest["cancellation"]) ?? null,
   };
 }
+
+function toGuest(r: Row): PrivateGuest {
+  return {
+    id: r.id as string,
+    requestId: r.request_id as string,
+    slot: r.slot as number,
+    name: (r.name as string) ?? "",
+    email: (r.email as string) ?? "",
+    allergies: (r.allergies as string) ?? "",
+    dietary: ((r.dietary as string[]) ?? []) as DietaryFilter[],
+    messageOptIn: r.message_opt_in as boolean,
+    shareCents: r.share_cents as number,
+    status: r.status as PrivateGuest["status"],
+    holdKey: (r.hold_key as string | null) ?? null,
+    holdUntil: (r.hold_until as string | null) ?? null,
+    paidAt: (r.paid_at as string | null) ?? null,
+    detailsAt: (r.details_at as string | null) ?? null,
+    voucherId: (r.voucher_id as string | null) ?? null,
+    voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
+    passId: (r.pass_id as string | null) ?? null,
+    passAppliedCents: (r.pass_applied_cents as number) ?? 0,
+  };
+}
+
+function toPass(r: Row): ClassPass {
+  return {
+    id: r.id as string,
+    codeHash: r.code_hash as string,
+    codeLast4: r.code_last4 as string,
+    creditsTotal: r.credits_total as number,
+    creditsLeft: r.credits_left as number,
+    status: r.status as ClassPass["status"],
+    buyerName: (r.buyer_name as string) ?? "",
+    buyerEmail: r.buyer_email as string,
+    expiresOn: r.expires_on as string,
+    createdAt: r.created_at as string,
+  };
+}
+
+const toPhoto = (r: Row): ClassPhoto => ({
+  id: r.id as string,
+  sessionId: r.session_id as string,
+  path: r.path as string,
+  caption: (r.caption as string) ?? "",
+  createdAt: r.created_at as string,
+});
+
+const PAYMENT_TARGET_COLUMN = { order: "order_id", box: "box_order_id", corporate: "corporate_order_id", booking: "class_booking_id", private: "private_request_id" } as const;
 
 /** Postgres unique violation, e.g. a second live waitlist offer for the same date. */
 function isUniqueViolation(error: { code?: string } | null): boolean {
@@ -503,6 +568,7 @@ export const supabaseRepository: Repository = {
           email: o.email,
           phone: o.phone,
           marketing_opt_in: o.marketingOptIn,
+          photo_opt_out: o.photoOptOut ?? false,
           pickup_date: o.pickupDate,
           pickup_slot: o.pickupSlot,
           config: o.config,
@@ -599,6 +665,8 @@ export const supabaseRepository: Repository = {
           corporate_order_id: p.corporateOrderId ?? null,
           class_booking_id: p.classBookingId ?? null,
           private_request_id: p.privateRequestId ?? null,
+          pass_id: p.passId ?? null,
+          share_hold_key: p.shareHoldKey ?? null,
           kind: p.kind,
           amount_cents: p.amountCents,
           stripe_session_id: p.stripeSessionId,
@@ -1125,6 +1193,9 @@ export const supabaseRepository: Repository = {
   async cancelBookingOnce(id, onlyUnpaid, record) {
     return check(await db().rpc("cancel_class_booking", { p_booking_id: id, p_only_unpaid: onlyUnpaid, p_record: record })) as boolean;
   },
+  async setBookingCancellation(id, record) {
+    check(await db().from("class_bookings").update({ cancellation: record }).eq("id", id));
+  },
   async claimBookingMessage(bookingId, key) {
     const { error } = await db().from("booking_message_log").insert({ booking_id: bookingId, key });
     if (!error) return true;
@@ -1182,6 +1253,210 @@ export const supabaseRepository: Repository = {
     const data = check(await db().rpc("sales_summary", { p_from: from, p_to: to })) as Omit<SalesSummary, "averageCents">;
     return { ...data, averageCents: data.orders ? Math.round(data.revenueCents / data.orders) : 0 };
   },
+
+  // Phase 4 -----------------------------------------------------------------
+  async setPrivateShareToken(id, tokenHash) {
+    const rows = check(await db().from("private_requests").update({ share_token_hash: tokenHash }).eq("id", id).is("share_token_hash", null).select("id")) as Row[];
+    return rows.length === 1;
+  },
+  async getPrivateRequestByShareHash(hash) {
+    const row = check(await db().from("private_requests").select("*").eq("share_token_hash", hash).maybeSingle()) as Row | null;
+    return row ? toPrivate(row) : null;
+  },
+  async claimNudge(id, before, now) {
+    const rows = check(
+      await db().from("private_requests").update({ last_nudge_at: now }).eq("id", id).or(`last_nudge_at.is.null,last_nudge_at.lte.${before}`).select("id"),
+    ) as Row[];
+    return rows.length === 1;
+  },
+  async cancelPrivateOnce(id, record) {
+    const rows = check(
+      await db().from("private_requests").update({ status: "cancelled", cancellation: record }).eq("id", id).not("status", "in", "(cancelled,declined)").select("id"),
+    ) as Row[];
+    return rows.length === 1;
+  },
+  async createGuestSlots(requestId, shares) {
+    const { error } = await db()
+      .from("private_guests")
+      .insert(shares.map((cents, i) => ({ request_id: requestId, slot: i + 1, share_cents: cents })));
+    if (error && !isUniqueViolation(error)) throw new Error(`Database error: ${error.message}`);
+  },
+  async listGuests(requestId) {
+    return (check(await db().from("private_guests").select("*").eq("request_id", requestId).order("slot")) as Row[]).map(toGuest);
+  },
+  async getGuest(id) {
+    const row = check(await db().from("private_guests").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toGuest(row) : null;
+  },
+  async claimGuestSlot(requestId, d) {
+    return check(
+      await db().rpc("claim_guest_slot", {
+        p_request_id: requestId,
+        p_name: d.name,
+        p_email: d.email,
+        p_allergies: d.allergies,
+        p_dietary: d.dietary,
+        p_opt_in: d.messageOptIn,
+      }),
+    ) as string | null;
+  },
+  async updateGuestDetails(id, d) {
+    check(
+      await db()
+        .from("private_guests")
+        .update({ name: d.name, email: d.email, allergies: d.allergies, dietary: d.dietary, message_opt_in: d.messageOptIn, details_at: new Date().toISOString() })
+        .eq("id", id),
+    );
+  },
+  async holdShares(ids, holdKey, until) {
+    return check(await db().rpc("hold_shares", { p_ids: ids, p_key: holdKey, p_until: until })) as boolean;
+  },
+
+  async addClassPhoto(p) {
+    const row = check(await db().from("class_photos").insert({ id: p.id, session_id: p.sessionId, path: p.path, caption: p.caption }).select("*").single()) as Row;
+    return toPhoto(row);
+  },
+  async listClassPhotos(sessionId) {
+    return (check(await db().from("class_photos").select("*").eq("session_id", sessionId).order("created_at")) as Row[]).map(toPhoto);
+  },
+  async getClassPhoto(id) {
+    const row = check(await db().from("class_photos").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toPhoto(row) : null;
+  },
+  async deleteClassPhoto(id) {
+    check(await db().from("class_photos").delete().eq("id", id));
+  },
+
+  async createPass(p) {
+    const row = check(
+      await db()
+        .from("class_passes")
+        .insert({
+          id: p.id,
+          code_hash: p.codeHash,
+          code_last4: p.codeLast4,
+          credits_total: p.creditsTotal,
+          credits_left: p.creditsLeft,
+          status: p.status,
+          buyer_name: p.buyerName,
+          buyer_email: p.buyerEmail,
+          expires_on: p.expiresOn,
+        })
+        .select("*")
+        .single(),
+    ) as Row;
+    return toPass(row);
+  },
+  async getPassById(id) {
+    const row = check(await db().from("class_passes").select("*").eq("id", id).maybeSingle()) as Row | null;
+    return row ? toPass(row) : null;
+  },
+  async getPassByCodeHash(hash) {
+    const row = check(await db().from("class_passes").select("*").eq("code_hash", hash).maybeSingle()) as Row | null;
+    return row ? toPass(row) : null;
+  },
+  async listPasses() {
+    return (check(await db().from("class_passes").select("*").order("created_at", { ascending: false }).limit(1000)) as Row[]).map(toPass);
+  },
+  async redeemPass(codeHash, bookingId, max, today) {
+    return check(await db().rpc("redeem_pass", { p_code_hash: codeHash, p_booking: bookingId, p_max: max, p_today: today })) as number;
+  },
+  async returnPass(bookingId, today) {
+    return check(await db().rpc("return_pass", { p_booking: bookingId, p_today: today })) as number;
+  },
+  async updateBookingPrice(id, p) {
+    check(await db().from("class_bookings").update({ discount_cents: p.discountCents, total_cents: p.totalCents }).eq("id", id));
+  },
+  async markBookingPaidWithoutPayment(id) {
+    const rows = check(await db().from("class_bookings").update({ status: "paid" }).eq("id", id).eq("status", "awaiting_payment").select("id")) as Row[];
+    return rows.length === 1;
+  },
+  async markBoxPaidWithoutPayment(id) {
+    const rows = check(await db().from("box_orders").update({ status: "paid" }).eq("id", id).eq("status", "awaiting_payment").select("id")) as Row[];
+    return rows.length === 1;
+  },
+
+  async redeemVoucherFor(kind, codeHash, targetId, maxCents, today) {
+    return check(await db().rpc("redeem_voucher_for", { p_kind: kind, p_code_hash: codeHash, p_target: targetId, p_max_cents: maxCents, p_today: today })) as number;
+  },
+  async returnVoucherFor(kind, targetId, today) {
+    const rows = check(await db().rpc("return_voucher_for", { p_kind: kind, p_target: targetId, p_today: today })) as Row[];
+    const r = rows?.[0];
+    return { amount: (r?.amount as number) ?? 0, toVoucher: (r?.to_voucher as boolean) ?? false };
+  },
+
+  async setPaymentIntent(sessionId, intentId) {
+    check(await db().from("payments").update({ stripe_payment_intent: intentId }).eq("stripe_session_id", sessionId).is("stripe_payment_intent", null));
+  },
+  async listPaidPayments(kind, id) {
+    return (check(await db().from("payments").select("*").eq(PAYMENT_TARGET_COLUMN[kind], id).eq("status", "paid")) as Row[]).map(toPayment);
+  },
+  async recordRefund(r) {
+    check(
+      await db()
+        .from("refunds")
+        .insert({ payment_id: r.paymentId, amount_cents: r.amountCents, stripe_refund_id: r.stripeRefundId, status: r.status, reason: r.reason.slice(0, 200) }),
+    );
+    if (r.status === "succeeded") {
+      const row = check(await db().from("payments").select("amount_cents,refunded_cents").eq("id", r.paymentId).single()) as Row;
+      const next = Math.min(row.amount_cents as number, (row.refunded_cents as number) + r.amountCents);
+      check(await db().from("payments").update({ refunded_cents: next }).eq("id", r.paymentId));
+    }
+  },
+  async listRefunds(paymentIds) {
+    if (paymentIds.length === 0) return [];
+    const rows = check(await db().from("refunds").select("*").in("payment_id", paymentIds).order("created_at")) as Row[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      paymentId: r.payment_id as string,
+      amountCents: r.amount_cents as number,
+      stripeRefundId: (r.stripe_refund_id as string | null) ?? null,
+      status: r.status as RefundRecord["status"],
+      reason: (r.reason as string) ?? "",
+      createdAt: r.created_at as string,
+    }));
+  },
+  async recordChargeRefunded(eventId, intentId, amountRefunded) {
+    return check(await db().rpc("record_charge_refunded", { p_event_id: eventId, p_intent: intentId, p_amount_refunded: amountRefunded })) as boolean;
+  },
+
+  async claimStampReward(email, earned, orderId) {
+    return check(await db().rpc("claim_stamp_reward", { p_email: email, p_earned: earned, p_order: orderId })) as number;
+  },
+  async releaseStampReward(orderId) {
+    check(await db().from("stamp_rewards").delete().eq("order_id", orderId));
+  },
+  async countStampRewards(email) {
+    const { count, error } = await db().from("stamp_rewards").select("*", { count: "exact", head: true }).eq("email", email.toLowerCase());
+    if (error) throw new Error(`Database error: ${error.message}`);
+    return count ?? 0;
+  },
+
+  async redeemPassShare(codeHash, guestId, valueCents, today) {
+    return check(await db().rpc("redeem_pass_share", { p_code_hash: codeHash, p_guest: guestId, p_value_cents: valueCents, p_today: today })) as number;
+  },
+  async returnPassShare(guestId, today) {
+    return check(await db().rpc("return_pass_share", { p_guest: guestId, p_today: today })) as number;
+  },
+  async markSharePaidFree(guestId) {
+    return check(await db().rpc("mark_share_paid_free", { p_guest: guestId })) as boolean;
+  },
+  async partialCancelBooking(w) {
+    return check(
+      await db().rpc("partial_cancel_booking", {
+        p_booking: w.bookingId,
+        p_expected_seats: w.expectedSeats,
+        p_new_guests: w.guests,
+        p_new_discount: w.discountCents,
+        p_new_total: w.totalCents,
+        p_cash_out: w.cashOutCents,
+        p_voucher_out: w.voucherOutCents,
+        p_pass_back: w.passCreditsBack,
+        p_today: w.today,
+        p_record: w.record,
+      }),
+    ) as boolean;
+  },
 };
 
 function toPayment(r: Row): Payment {
@@ -1193,6 +1468,10 @@ function toPayment(r: Row): Payment {
     corporateOrderId: (r.corporate_order_id as string | null) ?? null,
     classBookingId: (r.class_booking_id as string | null) ?? null,
     privateRequestId: (r.private_request_id as string | null) ?? null,
+    passId: (r.pass_id as string | null) ?? null,
+    shareHoldKey: (r.share_hold_key as string | null) ?? null,
+    stripePaymentIntent: (r.stripe_payment_intent as string | null) ?? null,
+    refundedCents: (r.refunded_cents as number) ?? 0,
     kind: r.kind as Payment["kind"],
     amountCents: r.amount_cents as number,
     stripeSessionId: r.stripe_session_id as string,
