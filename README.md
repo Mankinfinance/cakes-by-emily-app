@@ -2,7 +2,13 @@
 
 A mobile-first website where customers design a custom cake, see the price as they go, pick a date and a 30 minute pickup time, and pay a deposit through Stripe. Emily runs everything from a private admin area: orders, progress updates with photos and videos, prices, what's shown on the menu, capacity, days off and peak dates.
 
-This covers **phases 1 and 2** of the plan: ordering and payments, then the time-savers (automatic messages, design approval, a waitlist, a kitchen sheet, change or cancel under Emily's terms) and seasonal boxes and gift vouchers. Corporate packages, reviews, referrals, classes and the other ideas from the concept demo come in later phases.
+This covers **phases 1 to 3** of the plan:
+
+1. Ordering and payments.
+2. The time-savers (automatic messages, design approval, a waitlist, a kitchen sheet, change or cancel under Emily's terms), seasonal boxes and gift vouchers.
+3. Corporate packages, reviews, referrals and a stamp card, party add-ons, a sales snapshot, and Cake and Sip classes with private group bookings.
+
+What's left for a later phase is listed under [Future work](#future-work-phase-4).
 
 > **All prices in this code are samples** copied from the concept demo. Emily sets her real prices in the admin before launch.
 
@@ -23,6 +29,12 @@ This covers **phases 1 and 2** of the plan: ordering and payments, then the time
 - **Waitlist** (phase 2): fully booked dates can be tapped to join a waitlist with the cake design saved. When a place frees up, the first person gets an email with a claim link that holds the place for 24 hours, then it moves to the next person.
 - **Seasonal boxes** (phase 2, `/boxes`): limited pre-order boxes with stock left and a countdown, paid in full.
 - **Gift vouchers** (phase 2, `/vouchers`): buy a voucher and the code is emailed (to the recipient too, if given). Codes are applied at checkout as credit, partial balances carry over, and they expire after 12 months (a setting).
+- **Party add-ons** (phase 3): number candles, sparklers, a box upgrade and cake stand hire, offered on the review step. Stand hire adds a refundable bond and a "please return the stand" reminder after pickup.
+- **Referrals and stamp card** (phase 3): every customer gets a referral code on their order page ("Give $10, get $10", both amounts are settings). A new customer using it gets money off their first order, and the referrer gets a credit code when that order's deposit is paid. Every 5th collected order (a setting) earns a free reward, added to the next order automatically as a $0 line.
+- **Reviews** (phase 3): the thank-you email links to an on-site review form (a private link, one review per order) with stars, a few words, an optional photo and a tick to agree to it being published. Approved reviews show on the home page (first name and initial only), with a link to leave a Google review too.
+- **Corporate orders** (phase 3, `/corporate`): logo cookies and cupcakes in set quantities, a logo upload (PNG, JPG or WebP only), company name and optional ABN, a pickup date and time, and a deposit, with the balance paid later from the order page.
+- **Cake and Sip classes** (phase 3, `/classes`): class types with level and age notes, upcoming sessions with seats left, booking 1 to 6 seats with each guest's name and allergies, an 18+ tick for BYO sip classes, a 10% group discount from 4 seats (settings), full payment, a ticket page and an "Add to calendar" file. Sold-out classes take a waitlist: when seats free up, the first person gets an email with a link that holds the seats for 24 hours.
+- **Private classes and parties** (phase 3, `/classes/private`): Classic, Deluxe and Ultimate packages and a kids' party, with a live estimate. It's a request: Emily accepts or declines, and accepting emails a link to pay the deposit.
 
 **For Emily (at `/admin`)**
 
@@ -39,6 +51,11 @@ This covers **phases 1 and 2** of the plan: ordering and payments, then the time
 - **Automatic messages** (`/admin/automations`): turn each message on or off and change when the scheduled ones go out.
 - **Send a design for approval** from any new order, with a sketch or mood board.
 - **Terms settings**: the cancellation windows, admin fee, free date changes and free design change rounds. The checkout terms and the `/terms` page are written from these.
+- **Corporate** (`/admin/corporate`): package prices and "Show to customers" switches, orders with their logos, and ready, collected and cancel buttons. Corporate orders take a cake slot and appear on the kitchen sheet.
+- **Reviews** (`/admin/reviews`): approve or hide. Nothing is published until approved, and only reviews the customer agreed to publish can be approved. Collected orders show their review link so Emily can send it by hand too.
+- **Referrals and stamp card** (`/admin/referrals`): switch each on or off, set the amounts and the reward, and see every referral.
+- **Sales snapshot** (`/admin/snapshot`): this month and last month (orders, revenue booked, deposits taken, average order), top flavours, finishes and occasions, capacity for the next 4 weeks, balances owed (with a list), seasonal box sell-through, and voucher and credit balances outstanding. The money and counts are worked out in the database.
+- **Classes** (`/admin/classes`): add one class or a weekly or fortnightly series (days off and closed weekdays are skipped, with a preview first), class prices, minimums and "Show to customers" switches, and a warning on classes below their minimum with a date to decide by. Each class has a guest list with allergy flags, check-in ticks, a printable class-day sheet, "cancel booking" and "cancel class and refund everyone". Days with a class (or an accepted private class) take no cake orders (a setting). Private requests are accepted or declined at `/admin/classes/private`.
 - **Cancellations never refund automatically.** Each cancelled order records what is owed: the order page and an email tell Emily exactly how much to refund in the Stripe dashboard. When Emily cancels an order, everything paid is refunded. Credit from a cancellation is emailed to the customer as a **credit code**, and any voucher or credit used on a cancelled order is always given back as credit.
 
 ## Keeping customer data safe
@@ -53,6 +70,10 @@ This covers **phases 1 and 2** of the plan: ordering and payments, then the time
 - **Voucher and credit codes** are only stored as a fingerprint (hash) plus their last 4 characters. Using a code is done in one database step, so a code can't be spent twice even if two orders try at the same moment. Checking a code is rate limited to stop guessing.
 - **Seasonal box stock** is taken in one database step with a check that sold never exceeds the cap, so boxes can't be oversold. Unpaid checkouts are released by the daily job.
 - **Automatic messages** are recorded before they are sent, so none can go out twice.
+- **Class seats** are taken in one database step with a check that bookings never exceed the seats, so classes can't be overbooked.
+- **Referrals** are checked by email (no self-referral, one referral per new customer) with a database rule backing it up, and the referrer's credit is issued exactly once.
+- **Corporate logos** are limited to PNG, JPG and WebP. SVG files can carry scripts, so they are refused.
+- **Reviews** only ever show a first name and initial, and the database refuses to publish one without the customer's consent.
 - Only the details an order needs are collected. Marketing emails are opt-in.
 - Draft **privacy policy** (`/privacy`) and **terms** (`/terms`) pages are included, with [placeholders] for Emily's real wording. Have them checked before launch.
 
@@ -138,10 +159,24 @@ From the plan doc, "Checks before taking real orders". These are things to confi
 - [ ] Written terms checked and entered in the admin (deposits, refunds, changes, cake care, rush and peak fees). The cancellation windows, admin fee and free changes are settings in `/admin/settings`.
 - [ ] Review link (a Google review URL) added in `/admin/settings`.
 - [ ] Seasonal boxes and voucher amounts replaced with real ones (the seeded ones are samples).
+- [ ] Corporate package prices, class types and prices, private packages and party add-ons replaced with real ones (all seeded ones are samples).
+- [ ] Classes: check with the council about running classes at home, guest numbers, BYO alcohol (Liquor and Gaming NSW), and insurance that covers people attending.
 - [ ] Privacy policy and terms pages filled in (`src/app/privacy/page.tsx`, `src/app/terms/page.tsx`).
 - [ ] Real prices, notice period, capacity, pickup hours and pickup details (`PICKUP_DETAILS`).
 - [ ] Original high-resolution photos for the home page.
 - [ ] ABN on the terms page and in Stripe.
+
+## Future work (phase 4)
+
+Not built yet, on purpose:
+
+- **Split payments for private groups**: each guest pays their share from a link.
+- **Guest invite link**: the organiser shares one link and each guest adds their own name and allergies.
+- **Class photo gallery**: Emily uploads class photos and guests download and share them.
+- **3-class pass**: buy three classes up front at a discount.
+- Gift vouchers and credit codes on classes, seasonal boxes and corporate orders (today they work on cake orders).
+- Customer-initiated cancellation for class bookings (today Emily cancels them from the admin, with the refund recorded).
+- Automated Stripe refunds (today every refund is made by hand in the Stripe dashboard, as the order shows).
 
 ## For developers
 
@@ -154,11 +189,11 @@ npm run test:e2e    # end-to-end tests (Playwright) on a production build in tes
 npm run build       # production build
 ```
 
-- `src/lib/domain`: pure business rules (pricing, availability, slots, rush and peak, visibility). Most of the logic lives here and is unit tested.
+- `src/lib/domain`: pure business rules (pricing, availability, slots, rush and peak, visibility, terms, automatic messages, waitlist, vouchers, boxes, kitchen sheet, referrals and stamps, classes, the sales snapshot). Most of the logic lives here and is unit tested.
 - `src/lib/data`: the data adapter. `supabase.ts` for the live site, `memory.ts` for tests (`DATA_ADAPTER=memory`).
 - `src/lib/services`: order workflows, Stripe, email and private link tokens.
 - `src/app`: pages and API routes. Emily's admin is under `src/app/admin`.
 - `supabase/migrations`: the database schema, Row Level Security, and the functions that must be exact: recording a payment once, taking box stock, and using or giving back voucher balance. Add changes as **new** files; never edit one that may already have been run.
 - The business name lives in `src/lib/config.ts` if Emily picks a different brand.
 
-**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, voucher redemption and returns. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout. **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).
+**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, voucher redemption and returns, referral rules, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout. **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).

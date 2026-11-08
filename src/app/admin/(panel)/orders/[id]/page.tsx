@@ -8,6 +8,8 @@ import { formatAud } from "@/lib/domain/money";
 import { balanceOwing } from "@/lib/domain/pricing";
 import { nextStage, stageLabel } from "@/lib/domain/stages";
 import { DIETARY_FILTERS } from "@/lib/domain/types";
+import { siteUrl } from "@/lib/config";
+import { reviewLink } from "@/lib/services/common";
 import { OrderActions } from "./OrderActions";
 import { SendForApproval } from "./SendForApproval";
 import { PostUpdate } from "./PostUpdate";
@@ -46,6 +48,14 @@ export default async function AdminOrder({ params }: PageProps<"/admin/orders/[i
         <div className="mt-4">
           <OrderActions orderId={order.id} nextLabel={next ? stageLabel(next) : null} canCancel={order.stage !== "cancelled" && order.stage !== "collected"} />
         </div>
+        {order.stage === "collected" && (
+          <p className="mt-3 break-all text-sm">
+            Review link (sent with the thank-you email):{" "}
+            <a className="underline" href={reviewLink(siteUrl(), order.id)} data-testid="review-link">
+              {reviewLink(siteUrl(), order.id)}
+            </a>
+          </p>
+        )}
         {order.approvedAt && (
           <p className="mt-3 text-sm" data-testid="approved-at">
             Design approved by the customer on {new Date(order.approvedAt).toLocaleString("en-AU", { timeZone: "Australia/Sydney" })}.

@@ -71,7 +71,8 @@ export async function bookClass(deps: Deps, req: ClassBookingRequest) {
       throw new OrderError("Sorry, that waitlist offer has expired.", 410);
     }
   } else if (!(await repo.reserveSeats(session.id, req.seats))) {
-    throw new OrderError(seatsLeft(session) === 0 ? "Sorry, that class is sold out. Join the waitlist instead." : `Sorry, only ${seatsLeft(session)} seats are left.`, 409);
+    const left = seatsLeft((await repo.getSession(session.id)) ?? session);
+    throw new OrderError(left === 0 ? "Sorry, that class is sold out. Join the waitlist instead." : `Sorry, only ${left} ${left === 1 ? "seat is" : "seats are"} left.`, 409);
   }
 
   const price = classPrice(type.priceCents, req.seats, settings);
