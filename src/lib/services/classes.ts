@@ -5,7 +5,18 @@
 import { randomUUID } from "node:crypto";
 import { BUSINESS } from "../config";
 import { automationMap } from "../domain/automations";
-import { belowMinimum, classPrice, MAX_SEATS_PER_BOOKING, privateEstimate, recurringDates, seatsLeft } from "../domain/classes";
+import {
+  belowMinimum,
+  classCancellationOutcome,
+  classPrice,
+  classPriceWithPass,
+  MAX_SEATS_PER_BOOKING,
+  privateEstimate,
+  recurringDates,
+  seatsLeft,
+  type ClassCancelOutcome,
+} from "../domain/classes";
+import { formatAud } from "../domain/money";
 import { addDays, daysBetween, todayInBusinessTz } from "../domain/dates";
 import type { CancellationRecord, ClassBooking, ClassSession, ClassType, PrivateRequest, WaitlistEntry } from "../domain/types";
 import { expiredOffers, isActiveOffer, nextInLine, OFFER_HOURS, placeInLine } from "../domain/waitlist";
@@ -13,6 +24,7 @@ import { RELEASE_AFTER_MINUTES, type Repository } from "../data/repository";
 import type { ClassBookingRequest, ClassWaitlistRequest, PrivateRequestInput } from "../validation";
 import { adminEmail, nowOf, OrderError, ticketLink, type Deps, type LightDeps } from "./common";
 import {
+  bookingCancelledByCustomerAlert,
   classAlertEmail,
   classCancelledAlertEmail,
   classCancelledEmail,
@@ -23,6 +35,7 @@ import {
   classWaitlistOfferEmail,
   privateAcceptedEmail,
   privateAlertEmail,
+  privateCancelledEmail,
   privateDeclinedEmail,
   privatePaidEmail,
   privateReceivedEmail,
@@ -30,6 +43,10 @@ import {
   type Email,
 } from "./email";
 import { pickupDetailsText } from "./messages";
+import { precheckPass } from "./passes";
+import { refundTarget } from "./refunds";
+import { setUpShares } from "./split";
+import { giveBackVoucherFor, issueCredit, precheckVoucher } from "./vouchers";
 import { hashToken, linkToken, looksLikeToken, newReference, randomToken } from "./tokens";
 
 export const classClaimLink = (baseUrl: string, token: string) => `${baseUrl}/classes/claim/${token}`;
@@ -60,6 +77,9 @@ export async function bookClass(deps: Deps, req: ClassBookingRequest) {
   if (session.status !== "scheduled" || session.date <= today || !type.visible) throw new OrderError("Sorry, that class isn't taking bookings.", 409);
   if (req.seats > MAX_SEATS_PER_BOOKING) throw new OrderError(`Up to ${MAX_SEATS_PER_BOOKING} seats per booking.`);
   if (type.isSip && !req.adultConfirmed) throw new OrderError("Please confirm everyone is 18 or over for this class.");
+  // Phase 4: check pass and voucher codes first, for a clear message. They're taken atomically below.
+  const passHash = await precheckPass(repo, req.passCode, today);
+  const voucherHash = await precheckVoucher(repo, req.voucherCode, today);
 
   // Claiming a waitlist offer: its seats are already held for this person.
   let claim: WaitlistEntry | null = null;
@@ -75,7 +95,7 @@ export async function bookClass(deps: Deps, req: ClassBookingRequest) {
     throw new OrderError(left === 0 ? "Sorry, that class is sold out. Join the waitlist instead." : `Sorry, only ${left} ${left === 1 ? "seat is" : "seats are"} left.`, 409);
   }
 
-  const price = classPrice(type.priceCents, req.seats, settings);
+  const full = classPrice(type.priceCents, req.seats, settings);
   const id = randomUUID();
   let booking: ClassBooking;
   try {
@@ -90,30 +110,57 @@ export async function bookClass(deps: Deps, req: ClassBookingRequest) {
       email: req.email,
       phone: req.phone,
       unitPriceCents: type.priceCents,
-      discountCents: price.discountCents,
-      totalCents: price.totalCents,
+      discountCents: full.discountCents,
+      totalCents: full.totalCents,
       adultConfirmed: req.adultConfirmed,
       marketingOptIn: req.marketingOptIn,
       waitlistId: claim?.id ?? null,
       termsAcceptedAt: now.toISOString(),
     });
+
+    let total = full.totalCents;
+    if (passHash) {
+      const credits = await repo.redeemPass(passHash, id, req.seats, today);
+      if (credits === 0) throw new OrderError("That class pass couldn't be used. Please check the code.");
+      const price = classPriceWithPass(type.priceCents, req.seats, credits, settings);
+      total = price.totalCents;
+      await repo.updateBookingPrice(id, { discountCents: price.discountCents, totalCents: price.totalCents });
+    }
+    let applied = 0;
+    if (voucherHash && total > 0) {
+      applied = await repo.redeemVoucherFor("booking", voucherHash, id, total, today);
+      if (applied === 0) throw new OrderError("Sorry, that voucher code could not be used. Please check it and try again.");
+    }
+    booking = (await repo.getBookingById(id))!;
     const link = ticketLink(deps.baseUrl, id);
+    const payNow = total - applied;
+    if (payNow <= 0) {
+      // A pass or voucher covered everything: no checkout needed.
+      await repo.markBookingPaidWithoutPayment(id);
+      booking = (await repo.getBookingById(id))!;
+      await onClassPaid(deps, booking);
+      return { booking, checkoutUrl: `${link}?paid=1` };
+    }
     const checkout = await deps.payments.createCheckout({
       targetId: id,
       reference: booking.reference,
       kind: "class",
-      amountCents: price.totalCents,
+      amountCents: payNow,
       description: `${BUSINESS.name}: ${type.name} x ${req.seats}`,
       customerEmail: req.email,
       successUrl: `${link}?paid=1`,
       cancelUrl: `${deps.baseUrl}/classes?cancelled=1`,
     });
-    await repo.createPayment({ orderId: null, boxOrderId: null, voucherId: null, classBookingId: id, kind: "class", amountCents: price.totalCents, stripeSessionId: checkout.id });
+    await repo.createPayment({ orderId: null, boxOrderId: null, voucherId: null, classBookingId: id, kind: "class", amountCents: payNow, stripeSessionId: checkout.id });
     return { booking, checkoutUrl: checkout.url };
   } catch (err) {
-    // Give the seats back if anything after reserving failed.
+    // Give the seats, pass credits and voucher back if anything after reserving failed.
     if (!(await repo.getBookingById(id))) await repo.releaseSeats(session.id, req.seats);
-    else await repo.cancelBookingOnce(id, true, null);
+    else {
+      await repo.cancelBookingOnce(id, true, null);
+      await repo.returnPass(id, today);
+      await repo.returnVoucherFor("booking", id, today);
+    }
     throw err;
   }
 }
@@ -185,17 +232,67 @@ export async function expireClassOffers(deps: LightDeps): Promise<{ expired: num
   return { expired: gone.length, offered };
 }
 
-function emilyCancelRecord(b: ClassBooking, daysOut: number, reason: string): CancellationRecord {
+/**
+ * After a booking is cancelled: credit, voucher and pass credits back, the
+ * refund (automatic when switched on), and the record updated to match.
+ */
+async function settleCancellation(deps: LightDeps, b: ClassBooking, record: CancellationRecord): Promise<CancellationRecord> {
+  const today = todayInBusinessTz(nowOf(deps));
+  if (record.creditCents > 0) {
+    await issueCredit(deps, { email: b.email, name: b.contactName, amountCents: record.creditCents, reason: `here is the credit from your cancelled class booking ${b.reference}.`, sourceOrderId: null });
+  }
+  if (record.voucherReturnedCents > 0) await giveBackVoucherFor(deps, "booking", b.id, { email: b.email, name: b.contactName, reference: b.reference });
+  if ((record.passCreditsReturned ?? 0) > 0) await deps.repo.returnPass(b.id, today);
+  const refund = await refundTarget(deps, "booking", b.id, record.refundCents, `cancel-${record.by}`, `class booking ${b.reference}`);
+  if (refund.refundedCents > 0) {
+    record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+    await deps.repo.setBookingCancellation(b.id, record);
+  }
+  return record;
+}
+
+function recordFrom(o: ClassCancelOutcome, by: CancellationRecord["by"], daysOut: number, now: Date): CancellationRecord {
   return {
-    at: new Date().toISOString(),
-    by: "emily",
+    at: now.toISOString(),
+    by,
     daysOut,
-    refundCents: b.amountPaidCents,
-    creditCents: 0,
-    keptCents: 0,
-    voucherReturnedCents: 0,
-    summary: `${reason} Everything paid (${(b.amountPaidCents / 100).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}) is refunded.`,
+    refundCents: o.refundCents,
+    creditCents: o.creditCents,
+    keptCents: o.keptCents,
+    voucherReturnedCents: o.voucherReturnedCents,
+    passCreditsReturned: o.passCreditsReturned,
+    summary: o.summary,
   };
+}
+
+/** What a customer would get back if they cancelled today (for the ticket page). */
+export async function selfCancelPreview(repo: Repository, booking: ClassBooking, now = new Date()) {
+  const settings = await repo.getSettings();
+  const session = await repo.getSession(booking.sessionId);
+  if (!session) return null;
+  const daysOut = daysBetween(todayInBusinessTz(now), session.date);
+  const canCancel = booking.status === "paid" && session.status === "scheduled" && daysOut >= 1;
+  return { daysOut, canCancel, outcome: classCancellationOutcome(booking, settings, daysOut, "customer") };
+}
+
+/** The customer cancels from their ticket page, under the class terms. */
+export async function selfCancelBooking(deps: LightDeps, bookingId: string): Promise<CancellationRecord> {
+  const booking = await deps.repo.getBookingById(bookingId);
+  if (!booking) throw new OrderError("Booking not found.", 404);
+  const now = nowOf(deps);
+  const preview = await selfCancelPreview(deps.repo, booking, now);
+  if (!preview?.canCancel) {
+    throw new OrderError(booking.status === "cancelled" ? "This booking is already cancelled." : "It's too close to the class to cancel online. Please message Emily.");
+  }
+  const { session, type } = await sessionAndType(deps.repo, booking.sessionId);
+  let record = recordFrom(preview.outcome, "customer", preview.daysOut, now);
+  if (!(await deps.repo.cancelBookingOnce(booking.id, false, record))) throw new OrderError("This booking is already cancelled.", 409);
+  record = await settleCancellation(deps, booking, record);
+  await sendSafely(deps.mailer, classCancelledEmail(booking, type, session, record));
+  const to = adminEmail();
+  if (to) await sendSafely(deps.mailer, bookingCancelledByCustomerAlert(booking, type, session, record, to));
+  await offerNextClass(deps, session.id);
+  return record;
 }
 
 /** Emily cancels one booking: full refund recorded, seats go to the waitlist. */
@@ -203,30 +300,40 @@ export async function cancelBooking(deps: LightDeps, bookingId: string): Promise
   const booking = await deps.repo.getBookingById(bookingId);
   if (!booking) throw new OrderError("Booking not found.", 404);
   const { session, type } = await sessionAndType(deps.repo, booking.sessionId);
-  const record = emilyCancelRecord(booking, daysBetween(todayInBusinessTz(nowOf(deps)), session.date), "Emily cancelled this booking.");
+  const settings = await deps.repo.getSettings();
+  const now = nowOf(deps);
+  const daysOut = daysBetween(todayInBusinessTz(now), session.date);
+  let record = recordFrom(classCancellationOutcome(booking, settings, daysOut, "emily"), "emily", daysOut, now);
   if (!(await deps.repo.cancelBookingOnce(booking.id, false, record))) throw new OrderError("This booking is already cancelled.", 409);
+  record = await settleCancellation(deps, booking, record);
   await sendSafely(deps.mailer, classCancelledEmail(booking, type, session, record));
+  const manual = record.refundCents - (record.autoRefundedCents ?? 0);
   const to = adminEmail();
-  if (to) await sendSafely(deps.mailer, classCancelledAlertEmail(type, session, record.refundCents ? [{ reference: booking.reference, cents: record.refundCents }] : [], to));
+  if (to) await sendSafely(deps.mailer, classCancelledAlertEmail(type, session, manual > 0 ? [{ reference: booking.reference, cents: manual }] : [], to));
   await offerNextClass(deps, session.id);
   return record;
 }
 
 /** Emily cancels a whole class (for example below the minimum): every booking is refunded. */
-export async function cancelClass(deps: LightDeps, sessionId: string): Promise<{ refunds: { reference: string; cents: number }[] }> {
+export async function cancelClass(deps: LightDeps, sessionId: string): Promise<{ refunds: { reference: string; cents: number }[]; autoRefundedCents: number }> {
   const { session, type } = await sessionAndType(deps.repo, sessionId);
   if (session.status === "cancelled") throw new OrderError("This class is already cancelled.", 409);
   await deps.repo.updateSession(session.id, { status: "cancelled" });
-  const daysOut = daysBetween(todayInBusinessTz(nowOf(deps)), session.date);
+  const settings = await deps.repo.getSettings();
+  const now = nowOf(deps);
+  const daysOut = daysBetween(todayInBusinessTz(now), session.date);
   const refunds: { reference: string; cents: number }[] = [];
+  let autoRefundedCents = 0;
   for (const b of await deps.repo.listBookings({ sessionId, includeUnpaid: true })) {
     if (b.status === "cancelled") continue;
-    const record = emilyCancelRecord(b, daysOut, "This class has been cancelled.");
+    const outcome = classCancellationOutcome(b, settings, daysOut, "emily");
+    let record = recordFrom({ ...outcome, summary: outcome.summary.replace("Emily cancelled this booking", "This class has been cancelled") }, "emily", daysOut, now);
     if (await deps.repo.cancelBookingOnce(b.id, false, record)) {
-      if (b.status === "paid") {
-        if (record.refundCents) refunds.push({ reference: b.reference, cents: record.refundCents });
-        await sendSafely(deps.mailer, classCancelledEmail(b, type, session, record));
-      }
+      record = await settleCancellation(deps, b, record);
+      autoRefundedCents += record.autoRefundedCents ?? 0;
+      const manual = record.refundCents - (record.autoRefundedCents ?? 0);
+      if (manual > 0) refunds.push({ reference: b.reference, cents: manual });
+      if (b.status === "paid") await sendSafely(deps.mailer, classCancelledEmail(b, type, session, record));
     }
   }
   for (const w of await deps.repo.listWaitlist({ sessionId })) {
@@ -234,7 +341,7 @@ export async function cancelClass(deps: LightDeps, sessionId: string): Promise<{
   }
   const to = adminEmail();
   if (to) await sendSafely(deps.mailer, classCancelledAlertEmail(type, session, refunds, to));
-  return { refunds };
+  return { refunds, autoRefundedCents };
 }
 
 export async function setCheckIn(repo: Repository, bookingId: string, guestIndex: number, checkedIn: boolean): Promise<void> {
@@ -314,9 +421,12 @@ export async function runClassMessages(deps: LightDeps): Promise<{ class_reminde
 export async function releaseStaleBookings(deps: LightDeps): Promise<number> {
   const before = new Date(nowOf(deps).getTime() - RELEASE_AFTER_MINUTES * 60_000).toISOString();
   let n = 0;
+  const today = todayInBusinessTz(nowOf(deps));
   for (const b of await deps.repo.listStaleUnpaidBookings(before)) {
     if (await deps.repo.cancelBookingOnce(b.id, true, null)) {
       n++;
+      await deps.repo.returnPass(b.id, today);
+      await giveBackVoucherFor(deps, "booking", b.id, { email: b.email, name: b.contactName, reference: b.reference });
       await offerNextClass(deps, b.sessionId);
     }
   }
@@ -369,7 +479,8 @@ export async function requestPrivate(deps: LightDeps, input: PrivateRequestInput
 export async function acceptPrivate(deps: LightDeps, id: string): Promise<void> {
   const r = await deps.repo.getPrivateRequest(id);
   if (!r) throw new OrderError("Request not found.", 404);
-  const token = randomToken();
+  // The organiser's link is an HMAC of the request id, so later emails can link back to it. Only its hash is stored.
+  const token = linkToken("organiser", id);
   if (!(await deps.repo.setPrivateStatus(id, "accepted", "requested", hashToken(token)))) throw new OrderError("This request has already been answered.", 409);
   await sendSafely(deps.mailer, privateAcceptedEmail(r, privatePayLink(deps.baseUrl, token)));
 }
@@ -405,4 +516,32 @@ export async function startPrivateDeposit(deps: Deps, r: PrivateRequest, token: 
 
 export async function onPrivatePaid(deps: LightDeps, r: PrivateRequest): Promise<void> {
   await sendSafely(deps.mailer, privatePaidEmail(r));
+  // Phase 4: guest places and the share link for split payments.
+  await setUpShares(deps, (await deps.repo.getPrivateRequest(r.id)) ?? r);
+}
+
+/** Emily cancels a private class: everything paid (deposit and guests' shares) is refunded. */
+export async function cancelPrivate(deps: LightDeps, id: string): Promise<CancellationRecord> {
+  const r = await deps.repo.getPrivateRequest(id);
+  if (!r) throw new OrderError("Request not found.", 404);
+  const now = nowOf(deps);
+  const paid = (await deps.repo.listPaidPayments("private", r.id)).reduce((s, p) => s + p.amountCents - (p.refundedCents ?? 0), 0);
+  let record: CancellationRecord = {
+    at: now.toISOString(),
+    by: "emily",
+    daysOut: daysBetween(todayInBusinessTz(now), r.preferredDate),
+    refundCents: paid,
+    creditCents: 0,
+    keptCents: 0,
+    voucherReturnedCents: 0,
+    summary: `Emily cancelled this private class, so everything paid (${formatAud(paid)}) is refunded.`,
+  };
+  if (!(await deps.repo.cancelPrivateOnce(r.id, record))) throw new OrderError("This request is already closed.", 409);
+  const refund = await refundTarget(deps, "private", r.id, paid, "cancel-emily", `private class ${r.reference}`);
+  record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+  await sendSafely(deps.mailer, privateCancelledEmail(r, record.summary));
+  for (const g of await deps.repo.listGuests(r.id)) {
+    if (g.status === "paid" && g.email) await sendSafely(deps.mailer, privateCancelledEmail({ ...r, email: g.email, contactName: g.name || r.contactName }, record.summary));
+  }
+  return record;
 }

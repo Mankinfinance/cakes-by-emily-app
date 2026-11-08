@@ -129,6 +129,14 @@ export const SAMPLE_SETTINGS: Settings = {
     { key: "ultimate", name: "Ultimate", includes: "Deluxe plus a custom celebration cake for the guest of honour", perPersonCents: 15000, depositCents: 15000, minGuests: 6, maxGuests: 10, kids: false, visible: true },
     { key: "kids", name: "Kids' cupcake party", includes: "1.5 hours of cupcake decorating, a parent or guardian stays", perPersonCents: 5000, depositCents: 10000, minGuests: 6, maxGuests: 10, kids: true, visible: true },
   ],
+  splitDueDays: 7,
+  classFullRefundDays: 7,
+  classCreditDays: 3,
+  passEnabled: true,
+  passPriceCents: 25500,
+  passCredits: 3,
+  passValidMonths: 12,
+  autoRefunds: false,
 };
 
 export const SAMPLE_AUTOMATIONS: Automation[] = [

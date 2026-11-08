@@ -115,6 +115,19 @@ export interface Settings {
   /** When true, days with a class (or an accepted private class) take no cake orders. */
   classBlocksCakes: boolean;
   privatePackages: PrivatePackage[];
+  // Phase 4
+  /** Split payments: every share is due this many days before a private class. */
+  splitDueDays: number;
+  /** Class bookings cancelled by the customer this many days or more before: full refund. */
+  classFullRefundDays: number;
+  /** From this many days up to the full refund window: what was paid becomes credit. Inside it: nothing back. */
+  classCreditDays: number;
+  passEnabled: boolean;
+  passPriceCents: number;
+  passCredits: number;
+  passValidMonths: number;
+  /** When on, refunds the terms allow are made through Stripe automatically. Off by default. */
+  autoRefunds: boolean;
 }
 
 export interface PrivatePackage {
@@ -266,6 +279,10 @@ export interface CancellationRecord {
   /** Voucher or credit used on the order that was given back. */
   voucherReturnedCents: number;
   summary: string;
+  /** Phase 4: class pass credits given back, and refunds made through Stripe. */
+  passCreditsReturned?: number;
+  autoRefundedCents?: number;
+  refundIds?: string[];
 }
 
 export interface OrderUpdate {
@@ -286,7 +303,12 @@ export interface Payment {
   corporateOrderId?: string | null;
   classBookingId?: string | null;
   privateRequestId?: string | null;
-  kind: "deposit" | "balance" | "box" | "voucher" | "corporate_deposit" | "corporate_balance" | "class" | "private_deposit";
+  passId?: string | null;
+  /** Split payments: the guest places this payment holds. */
+  shareHoldKey?: string | null;
+  stripePaymentIntent?: string | null;
+  refundedCents?: number;
+  kind: "deposit" | "balance" | "box" | "voucher" | "corporate_deposit" | "corporate_balance" | "class" | "private_deposit" | "private_share" | "pass";
   amountCents: number;
   stripeSessionId: string;
   status: "pending" | "paid";
@@ -387,6 +409,8 @@ export interface BoxOrder {
   status: BoxOrderStatus;
   kitchenDone: boolean;
   createdAt: string;
+  voucherId?: string | null;
+  voucherAppliedCents?: number;
 }
 
 // Gift vouchers and credit codes ---------------------------------------
@@ -450,6 +474,8 @@ export interface CorporateOrder {
   kitchenDone: boolean;
   termsAcceptedAt: string;
   createdAt: string;
+  voucherId?: string | null;
+  voucherAppliedCents?: number;
 }
 
 // Phase 3: reviews -------------------------------------------------------------
@@ -546,9 +572,13 @@ export interface ClassBooking {
   cancellation: CancellationRecord | null;
   termsAcceptedAt: string;
   createdAt: string;
+  passId?: string | null;
+  passCredits?: number;
+  voucherId?: string | null;
+  voucherAppliedCents?: number;
 }
 
-export type PrivateRequestStatus = "requested" | "accepted" | "declined" | "paid";
+export type PrivateRequestStatus = "requested" | "accepted" | "declined" | "paid" | "cancelled";
 
 export interface PrivateRequest {
   id: string;
@@ -569,5 +599,60 @@ export interface PrivateRequest {
   status: PrivateRequestStatus;
   payTokenHash: string | null;
   amountPaidCents: number;
+  createdAt: string;
+  /** Phase 4: the guests' share link (hash only) and the last reminder nudge. */
+  shareTokenHash: string | null;
+  lastNudgeAt: string | null;
+  cancellation: CancellationRecord | null;
+}
+
+/** One guest place in a private class, with its share of the balance. */
+export interface PrivateGuest {
+  id: string;
+  requestId: string;
+  slot: number;
+  name: string;
+  email: string;
+  allergies: string;
+  dietary: DietaryFilter[];
+  messageOptIn: boolean;
+  shareCents: number;
+  status: "open" | "paid";
+  holdKey: string | null;
+  holdUntil: string | null;
+  paidAt: string | null;
+  detailsAt: string | null;
+}
+
+export interface ClassPhoto {
+  id: string;
+  sessionId: string;
+  path: string;
+  caption: string;
+  createdAt: string;
+}
+
+export interface ClassPass {
+  id: string;
+  codeHash: string;
+  codeLast4: string;
+  creditsTotal: number;
+  creditsLeft: number;
+  status: "pending" | "active" | "void";
+  buyerName: string;
+  buyerEmail: string;
+  expiresOn: string;
+  createdAt: string;
+}
+
+export type RefundTargetKind = "order" | "box" | "corporate" | "booking" | "private";
+
+export interface RefundRecord {
+  id: string;
+  paymentId: string;
+  amountCents: number;
+  stripeRefundId: string | null;
+  status: "succeeded" | "failed";
+  reason: string;
   createdAt: string;
 }

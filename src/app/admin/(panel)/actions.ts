@@ -9,9 +9,13 @@ import { getRepo } from "@/lib/data";
 import type { UploadTarget } from "@/lib/data/repository";
 import { canSetVisibility } from "@/lib/domain/visibility";
 import { getMailer } from "@/lib/services/email";
+import { tryGetPayments } from "@/lib/services/payments";
+import { cancelBoxByEmily } from "@/lib/services/boxes";
+import { cancelCorporate } from "@/lib/services/corporate";
 import { AUTOMATION_KEYS } from "@/lib/domain/types";
 import { cancelWithTerms, sendForApproval } from "@/lib/services/changes";
-import { acceptPrivate, cancelBooking, cancelClass, createSeries, declinePrivate, previewSeries, setCheckIn } from "@/lib/services/classes";
+import { acceptPrivate, cancelBooking, cancelClass, cancelPrivate, createSeries, declinePrivate, previewSeries, setCheckIn } from "@/lib/services/classes";
+import { emailGallery, removeClassPhoto, uploadClassPhoto } from "@/lib/services/gallery";
 import {
   advanceStage,
   finishVideoUpload,
@@ -35,7 +39,7 @@ export type ActionResult<T = undefined> = { ok: true; data?: T } | { ok: false; 
 const uuid = z.string().uuid();
 
 async function deps() {
-  return { repo: await getRepo(), mailer: getMailer(), baseUrl: siteUrl() };
+  return { repo: await getRepo(), mailer: getMailer(), baseUrl: siteUrl(), payments: tryGetPayments() };
 }
 
 function fail(err: unknown): { ok: false; error: string } {
@@ -306,8 +310,8 @@ export async function boxOrderAction(id: string, action: "collected" | "cancel")
     if (action === "collected") {
       if (bo.status !== "paid") return { ok: false, error: "Only paid pre-orders can be marked collected." };
       await repo.updateBoxOrder(bo.id, { status: "collected" });
-    } else if (!(await repo.cancelBoxOrder(bo.id, false))) {
-      return { ok: false, error: "This pre-order can't be cancelled." };
+    } else {
+      await cancelBoxByEmily(await deps(), bo.id);
     }
     revalidatePath("/admin/boxes");
     return { ok: true };
@@ -353,7 +357,7 @@ export async function corporateStatusAction(id: string, action: "ready" | "colle
         ? await repo.setCorporateStatus(uuid.parse(id), "ready", ["confirmed"])
         : action === "collected"
           ? await repo.setCorporateStatus(uuid.parse(id), "collected", ["confirmed", "ready"])
-          : await repo.setCorporateStatus(uuid.parse(id), "cancelled", ["awaiting_payment", "confirmed", "ready"]);
+          : (await cancelCorporate(await deps(), uuid.parse(id)), true);
     if (!ok) return { ok: false, error: "That change isn't possible for this order now." };
     revalidatePath("/admin/corporate");
     return { ok: true };
@@ -464,6 +468,55 @@ export async function privateAction(id: string, action: "accept" | "decline"): P
   try {
     if (action === "accept") await acceptPrivate(await deps(), uuid.parse(id));
     else await declinePrivate(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes/private");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Phase 4 ---------------------------------------------------------------------
+
+export async function uploadClassPhotoAction(form: FormData): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const sessionId = uuid.parse(form.get("sessionId"));
+    const caption = z.string().max(200).parse(form.get("caption") ?? "");
+    const file = form.get("photo");
+    if (!(file instanceof File) || file.size === 0) return { ok: false, error: "Choose a photo." };
+    if (file.size > MAX_PHOTO_BYTES) return { ok: false, error: "Photos must be under 4 MB." };
+    await uploadClassPhoto(await deps(), sessionId, { bytes: new Uint8Array(await file.arrayBuffer()), contentType: file.type }, caption);
+    revalidatePath(`/admin/classes/${sessionId}`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function deleteClassPhotoAction(photoId: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await removeClassPhoto(await deps(), uuid.parse(photoId));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function emailGalleryAction(sessionId: string): Promise<ActionResult<{ sent: number }>> {
+  await requireAdmin();
+  try {
+    return { ok: true, data: { sent: await emailGallery(await deps(), uuid.parse(sessionId)) } };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelPrivateAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelPrivate(await deps(), uuid.parse(id));
     revalidatePath("/admin/classes/private");
     return { ok: true };
   } catch (err) {

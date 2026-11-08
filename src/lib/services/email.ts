@@ -11,6 +11,7 @@ import type {
   BoxOrder,
   CancellationRecord,
   ClassBooking,
+  ClassPass,
   ClassSession,
   ClassType,
   CorporateOrder,
@@ -312,11 +313,16 @@ export function cancellationEmail(o: Order, r: CancellationRecord, link: string)
 export function cancellationAlertEmail(o: Order, r: CancellationRecord, adminLink: string, to: string): Email {
   return {
     to,
-    subject: `Cancelled: ${o.reference}${r.refundCents > 0 ? ` (refund ${formatAud(r.refundCents)} in Stripe)` : ""}`,
+    subject: `Cancelled: ${o.reference}${r.refundCents - (r.autoRefundedCents ?? 0) > 0 ? ` (refund ${formatAud(r.refundCents - (r.autoRefundedCents ?? 0))} in Stripe)` : ""}`,
     ...render(
       [
         `${o.customerName}'s order for ${when(o)} was cancelled by ${r.by === "emily" ? "you" : "the customer"}.`,
-        r.refundCents > 0 ? `ACTION: refund ${formatAud(r.refundCents)} in the Stripe dashboard.` : "No cash refund is due.",
+        (r.autoRefundedCents ?? 0) > 0 ? `${formatAud(r.autoRefundedCents!)} was refunded through Stripe automatically.` : "",
+        r.refundCents - (r.autoRefundedCents ?? 0) > 0
+          ? `ACTION: refund ${formatAud(r.refundCents - (r.autoRefundedCents ?? 0))} in the Stripe dashboard.`
+          : r.refundCents > 0
+            ? ""
+            : "No cash refund is due.",
         r.creditCents > 0 ? `${formatAud(r.creditCents)} was issued as a credit code.` : "",
         r.voucherReturnedCents > 0 ? `${formatAud(r.voucherReturnedCents)} of voucher or credit was given back.` : "",
       ].filter(Boolean),
@@ -366,7 +372,7 @@ export function boxConfirmationEmail(b: BoxOrder, link: string): Email {
     ...render(
       [
         `Hi ${b.customerName.split(" ")[0]}, thank you! Your pre-order is confirmed.`,
-        `${b.quantity} x ${b.boxName}, paid ${formatAud(b.amountPaidCents)}.`,
+        `${b.quantity} x ${b.boxName}, paid ${formatAud(b.amountPaidCents)}${b.voucherAppliedCents ? ` plus ${formatAud(b.voucherAppliedCents)} by voucher` : ""}.`,
         `Pickup: ${boxWhen(b)} in ${BUSINESS.suburb}.`,
       ],
       { href: link, label: "View your pre-order" },
@@ -437,7 +443,7 @@ export function corporateConfirmationEmail(c: CorporateOrder, link: string): Ema
       [
         `Hi ${c.contactName.split(" ")[0]}, thank you! Your order for ${c.companyName} is confirmed.`,
         `${c.packageName}, pickup ${corpWhen(c)} in ${BUSINESS.suburb}.`,
-        `Paid so far: ${formatAud(c.amountPaidCents)} of ${formatAud(c.totalCents)}.`,
+        `Paid so far: ${formatAud(c.amountPaidCents + (c.voucherAppliedCents ?? 0))} of ${formatAud(c.totalCents)}.`,
       ],
       { href: link, label: "View your order" },
     ),
@@ -621,5 +627,109 @@ export function privatePaidEmail(r: PrivateRequest): Email {
     to: r.email,
     subject: `Deposit received: private class ${r.reference}`,
     ...render([`Hi ${r.contactName.split(" ")[0]}, thank you! Your private class on ${formatDateLong(r.preferredDate)} is locked in.`]),
+  };
+}
+
+// Phase 4 templates ------------------------------------------------------
+
+export function refundFailedEmail(label: string, manualCents: number, refundedCents: number, to: string): Email {
+  return {
+    to,
+    subject: `Refund needed by hand: ${label}`,
+    ...render([
+      refundedCents > 0 ? `Stripe refunded ${formatAud(refundedCents)} automatically for ${label}.` : `The automatic refund for ${label} didn't go through.`,
+      `ACTION: refund ${formatAud(manualCents)} in the Stripe dashboard.`,
+    ]),
+  };
+}
+
+export function sharesReadyEmail(r: PrivateRequest, share: string, organiser: string, shareCents: number, due: string): Email {
+  return {
+    to: r.email,
+    subject: `Deposit received: share this link with your guests`,
+    ...render(
+      [
+        `Hi ${r.contactName.split(" ")[0]}, thank you! Your private ${r.packageName} class on ${formatDateLong(r.preferredDate)} is locked in.`,
+        `Send your guests this link. Each guest adds their details (name, allergies, dietary needs) and pays their share of ${formatAud(shareCents)}:`,
+        share,
+        `Shares are due by ${formatDateLong(due)}. You can follow who has paid, send a reminder, and pay any remaining shares after that date from your page:`,
+      ],
+      { href: organiser, label: "Your class page" },
+    ),
+  };
+}
+
+export function shareNudgeEmail(r: PrivateRequest, guestName: string, to: string, link: string, cents: number, due: string): Email {
+  return {
+    to,
+    subject: `Reminder: your share for ${r.contactName.split(" ")[0]}'s class`,
+    ...render(
+      [`Hi ${guestName.split(" ")[0]}, a friendly reminder from ${r.contactName.split(" ")[0]}: your share of ${formatAud(cents)} for the class on ${formatDateLong(r.preferredDate)} is due by ${formatDateLong(due)}.`],
+      { href: link, label: "Pay your share" },
+    ),
+  };
+}
+
+export function sharePaidEmail(r: PrivateRequest, guestName: string, to: string, cents: number): Email {
+  return {
+    to,
+    subject: `Share paid for ${r.contactName.split(" ")[0]}'s class`,
+    ...render([`Thank you${guestName ? `, ${guestName.split(" ")[0]}` : ""}! ${formatAud(cents)} received for the private class on ${formatDateLong(r.preferredDate)} at ${formatTime12(r.preferredTime)}.`]),
+  };
+}
+
+export function shareProgressEmail(r: PrivateRequest, paid: number, total: number, link: string): Email {
+  return {
+    to: r.email,
+    subject: `${paid} of ${total} shares paid`,
+    ...render([`Hi ${r.contactName.split(" ")[0]}, ${paid} of ${total} guests have now paid for your class on ${formatDateLong(r.preferredDate)}.`], { href: link, label: "See who's paid" }),
+  };
+}
+
+export function privateCancelledEmail(r: PrivateRequest, summary: string): Email {
+  return {
+    to: r.email,
+    subject: `Private class cancelled: ${formatDateLong(r.preferredDate)}`,
+    ...render([`Hi ${r.contactName.split(" ")[0]}, your private ${r.packageName} class on ${formatDateLong(r.preferredDate)} has been cancelled.`, summary]),
+  };
+}
+
+export function galleryEmail(to: string, name: string, className: string, date: string, link: string): Email {
+  return {
+    to,
+    subject: `Your photos from ${className}`,
+    ...render(
+      [`Hi ${name.split(" ")[0]}, thank you for coming on ${formatDateLong(date)}! The class photos are ready to view, download and share. Tag @${BUSINESS.instagram} if you post them.`],
+      { href: link, label: "See the photos" },
+    ),
+  };
+}
+
+export function passEmail(p: ClassPass, code: string): Email {
+  return {
+    to: p.buyerEmail,
+    subject: `Your ${p.creditsTotal}-class pass`,
+    ...render(
+      [
+        `Hi ${p.buyerName.split(" ")[0] || "there"}, thank you! Your pass gives you ${p.creditsTotal} class seats, valid until ${formatDateLong(p.expiresOn)}.`,
+        "Enter the code when you book a class. Each seat uses one credit. Keep this email safe: anyone with the code can use it.",
+      ],
+      undefined,
+      { label: `${p.creditsTotal}-class pass`, value: code },
+    ),
+  };
+}
+
+export function bookingCancelledByCustomerAlert(b: ClassBooking, t: ClassType, s: ClassSession, r: CancellationRecord, to: string): Email {
+  const manual = r.refundCents - (r.autoRefundedCents ?? 0);
+  return {
+    to,
+    subject: `Class booking cancelled: ${b.reference}${manual > 0 ? ` (refund ${formatAud(manual)} in Stripe)` : ""}`,
+    ...render([
+      `${b.contactName} cancelled ${b.seats} seat${b.seats === 1 ? "" : "s"} for ${t.name} on ${sessionWhen(s)}.`,
+      r.summary,
+      (r.autoRefundedCents ?? 0) > 0 ? `${formatAud(r.autoRefundedCents!)} was refunded through Stripe automatically.` : "",
+      manual > 0 ? `ACTION: refund ${formatAud(manual)} in the Stripe dashboard.` : "",
+    ].filter(Boolean)),
   };
 }

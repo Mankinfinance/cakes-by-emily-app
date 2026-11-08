@@ -5,6 +5,7 @@ import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
 import { formatDateLong, formatTime12 } from "@/lib/domain/dates";
 import { formatAud } from "@/lib/domain/money";
 import { corporateFromToken } from "@/lib/orders-public";
+import { corporateOwing } from "@/lib/services/corporate";
 import { CorporateBalanceButton } from "./CorporateBalanceButton";
 
 export const metadata: Metadata = { title: "Your corporate order", robots: { index: false, follow: false }, referrer: "no-referrer" };
@@ -17,7 +18,7 @@ export default async function CorporateOrderPage({ params, searchParams }: PageP
   const { paid } = await searchParams;
   const order = await corporateFromToken(token);
   if (!order) notFound();
-  const owing = Math.max(0, order.totalCents - order.amountPaidCents);
+  const owing = corporateOwing(order);
   return (
     <>
       <SiteHeader />
@@ -35,6 +36,12 @@ export default async function CorporateOrderPage({ params, searchParams }: PageP
             <dd className="text-right">{formatAud(order.totalCents)}</dd>
             <dt className="text-muted">Paid</dt>
             <dd className="text-right" data-testid="corp-paid">{formatAud(order.amountPaidCents)}</dd>
+            {(order.voucherAppliedCents ?? 0) > 0 && (
+              <>
+                <dt className="text-muted">Voucher or credit</dt>
+                <dd className="text-right">{formatAud(order.voucherAppliedCents!)}</dd>
+              </>
+            )}
             <dt className="font-semibold">Balance</dt>
             <dd className="text-right font-semibold" data-testid="corp-balance">{formatAud(owing)}</dd>
           </dl>

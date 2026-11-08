@@ -4,6 +4,7 @@ import { formatDateLong, formatTime12 } from "@/lib/domain/dates";
 import { formatAud } from "@/lib/domain/money";
 import { corporateStatusAction } from "../actions";
 import { ActionButton } from "../ActionButton";
+import { refundButtonLabel } from "@/lib/services/refunds";
 import { PackageRow } from "./PackageRow";
 
 const STATUS = { awaiting_payment: "Unpaid", confirmed: "Confirmed", ready: "Ready", collected: "Collected", cancelled: "Cancelled" } as const;
@@ -11,7 +12,7 @@ const STATUS = { awaiting_payment: "Unpaid", confirmed: "Confirmed", ready: "Rea
 export default async function CorporateAdmin() {
   await requireAdmin();
   const repo = await getRepo();
-  const [packages, orders] = await Promise.all([repo.listCorporatePackages(), repo.listCorporateOrders()]);
+  const [packages, orders, settings] = await Promise.all([repo.listCorporatePackages(), repo.listCorporateOrders(), repo.getSettings()]);
   const logos = await Promise.all(orders.map((o) => (o.logoPath ? repo.mediaUrl(o.logoPath) : Promise.resolve(null))));
   return (
     <div className="grid gap-6">
@@ -54,6 +55,7 @@ export default async function CorporateAdmin() {
                     {o.notes && <p className="text-muted">Notes: {o.notes}</p>}
                     <p>
                       Paid {formatAud(o.amountPaidCents)} of {formatAud(o.totalCents)}
+                      {(o.voucherAppliedCents ?? 0) > 0 && `, plus ${formatAud(o.voucherAppliedCents!)} by voucher`}
                     </p>
                   </div>
                 </div>
@@ -62,7 +64,11 @@ export default async function CorporateAdmin() {
                   {o.status === "confirmed" && <ActionButton action={corporateStatusAction.bind(null, o.id, "ready")} label="Ready" testId="corp-ready" />}
                   {(o.status === "confirmed" || o.status === "ready") && <ActionButton action={corporateStatusAction.bind(null, o.id, "collected")} label="Collected" />}
                   {o.status !== "cancelled" && o.status !== "collected" && (
-                    <ActionButton action={corporateStatusAction.bind(null, o.id, "cancel")} label="Cancel" confirmText={`Cancel this order? Refund ${formatAud(o.amountPaidCents)} in Stripe separately.`} />
+                    <ActionButton
+                      action={corporateStatusAction.bind(null, o.id, "cancel")}
+                      label={refundButtonLabel(settings.autoRefunds, o.amountPaidCents, "Cancel").label}
+                      confirmText={refundButtonLabel(settings.autoRefunds, o.amountPaidCents, "Cancel this order").confirm}
+                    />
                   )}
                 </div>
               </li>

@@ -158,6 +158,8 @@ export function termsLines(s: Settings): string[] {
       : "Please message Emily to change your pickup date.",
     "Any voucher or credit used on a cancelled order comes back as credit.",
     `Gift vouchers and credit are valid for ${s.voucherValidMonths} months and can't be exchanged for cash.`,
+    `Classes: cancel ${dayWord(s.classFullRefundDays)} or more before for a full refund; ${dayWord(s.classCreditDays)} to ${dayWord(Math.max(s.classCreditDays, s.classFullRefundDays - 1))} before, what you paid becomes credit; inside ${dayWord(s.classCreditDays)}, not refundable (class pass credits included).`,
+    `Class passes give ${s.passCredits} class ${s.passCredits === 1 ? "seat" : "seats"} and are valid for ${s.passValidMonths} months.`,
   ];
   return lines;
 }

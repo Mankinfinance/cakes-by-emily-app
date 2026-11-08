@@ -8,7 +8,11 @@ import { formatAud } from "@/lib/domain/money";
 import { cancelBookingAction, cancelClassAction } from "../../actions";
 import { ActionButton } from "../../ActionButton";
 import { PrintButton } from "../../kitchen/KitchenControls";
+import { siteUrl } from "@/lib/config";
+import { galleryLink } from "@/lib/services/common";
+import { refundButtonLabel } from "@/lib/services/refunds";
 import { CheckIn } from "./CheckIn";
+import { Gallery } from "./Gallery";
 
 export default async function SessionAdmin({ params }: PageProps<"/admin/classes/[id]">) {
   await requireAdmin();
@@ -23,6 +27,10 @@ export default async function SessionAdmin({ params }: PageProps<"/admin/classes
   const guests = paid.flatMap((b) => b.guests.map((g, i) => ({ ...g, booking: b, index: i })));
   const allergyCount = guests.filter((g) => g.allergies).length;
   const refundTotal = paid.reduce((s, b) => s + b.amountPaidCents, 0);
+  const settings = await repo.getSettings();
+  const photos = await repo.listClassPhotos(session.id);
+  const photoUrls = await Promise.all(photos.map((p) => repo.mediaUrl(p.path)));
+  const classCancel = refundButtonLabel(settings.autoRefunds, refundTotal, "Cancel class");
   return (
     <div className="kitchen-sheet grid gap-6">
       <div>
@@ -44,10 +52,10 @@ export default async function SessionAdmin({ params }: PageProps<"/admin/classes
         {session.status === "scheduled" && (
           <ActionButton
             action={cancelClassAction.bind(null, session.id)}
-            label="Cancel class and refund everyone"
+            label={settings.autoRefunds ? classCancel.label : "Cancel class and refund everyone"}
             className="btn btn-ghost"
             testId="cancel-class"
-            confirmText={`Cancel this class? Everyone is emailed, and you'll need to refund ${formatAud(refundTotal)} in Stripe.`}
+            confirmText={`${classCancel.confirm} Everyone booked is emailed, and pass credits and vouchers come back.`}
           />
         )}
       </div>
@@ -82,16 +90,23 @@ export default async function SessionAdmin({ params }: PageProps<"/admin/classes
           <li>Allergy-safe set-up for {allergyCount} guest{allergyCount === 1 ? "" : "s"}</li>
         </ul>
       </section>
+      <Gallery sessionId={session.id} photos={photos.map((p, i) => ({ id: p.id, url: photoUrls[i], caption: p.caption }))} viewUrl={galleryLink(siteUrl(), session.id)} />
       <section className="no-print card p-5 text-sm">
         <h2 className="font-serif text-xl">Bookings</h2>
         <ul className="mt-3 divide-y divide-line" data-testid="session-bookings">
           {bookings.map((b) => (
             <li key={b.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
               <span>
-                {b.reference}: {b.contactName}, {b.seats} seat{b.seats === 1 ? "" : "s"}, {formatAud(b.amountPaidCents)} {b.status === "cancelled" && "(cancelled)"}
+                {b.reference}: {b.contactName}, {b.seats} seat{b.seats === 1 ? "" : "s"}, {formatAud(b.amountPaidCents)}
+                {(b.passCredits ?? 0) > 0 && ` + ${b.passCredits} pass credit${b.passCredits === 1 ? "" : "s"}`}
+                {(b.voucherAppliedCents ?? 0) > 0 && ` + ${formatAud(b.voucherAppliedCents!)} voucher`} {b.status === "cancelled" && `(cancelled${b.cancellation?.by === "customer" ? " by the customer" : ""})`}
               </span>
               {b.status === "paid" && (
-                <ActionButton action={cancelBookingAction.bind(null, b.id)} label="Cancel booking" confirmText={`Cancel ${b.reference}? Refund ${formatAud(b.amountPaidCents)} in Stripe.`} />
+                <ActionButton
+                  action={cancelBookingAction.bind(null, b.id)}
+                  label={refundButtonLabel(settings.autoRefunds, b.amountPaidCents, "Cancel booking").label}
+                  confirmText={refundButtonLabel(settings.autoRefunds, b.amountPaidCents, `Cancel ${b.reference}`).confirm}
+                />
               )}
             </li>
           ))}

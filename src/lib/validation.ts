@@ -101,6 +101,18 @@ export const settingsSchema = z
         }),
       )
       .max(10),
+    splitDueDays: z.number().int().min(0).max(60),
+    classFullRefundDays: z.number().int().min(0).max(120),
+    classCreditDays: z.number().int().min(0).max(120),
+    passEnabled: z.boolean(),
+    passPriceCents: z.number().int().min(100).max(200_000),
+    passCredits: z.number().int().min(1).max(20),
+    passValidMonths: z.number().int().min(1).max(60),
+    autoRefunds: z.boolean(),
+  })
+  .refine((s) => s.classCreditDays <= s.classFullRefundDays, {
+    message: "The class credit window must start on or before the full refund window",
+    path: ["classCreditDays"],
   })
   .refine((s) => s.cancelCreditDays <= s.cancelFullRefundDays, {
     message: "The credit window must start on or before the full refund window",
@@ -218,6 +230,7 @@ export const waitlistRequestSchema = z.object({
 export type WaitlistRequest = z.infer<typeof waitlistRequestSchema>;
 
 export const boxOrderRequestSchema = z.object({
+  voucherCode: z.string().trim().max(40).default(""),
   boxId: z.string().uuid(),
   quantity: z.number().int().min(1).max(10),
   pickupDate: isoDate,
@@ -258,6 +271,7 @@ export const seasonalBoxSchema = z
 // Phase 3 ---------------------------------------------------------------------
 
 export const corporateRequestSchema = z.object({
+  voucherCode: z.string().trim().max(40).default(""),
   packageId: z.string().regex(/^[a-z0-9-]{1,60}$/),
   companyName: z.string().trim().min(1, "Please enter the company name").max(120),
   abn: z
@@ -299,6 +313,8 @@ export const classBookingSchema = z
     marketingOptIn: z.boolean().default(false),
     acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
     waitlistToken: z.string().trim().max(60).default(""),
+    passCode: z.string().trim().max(40).default(""),
+    voucherCode: z.string().trim().max(40).default(""),
   })
   .refine((b) => b.guests.length === b.seats, { message: "Please add a name for every seat", path: ["guests"] });
 export type ClassBookingRequest = z.infer<typeof classBookingSchema>;
@@ -331,4 +347,23 @@ export const sessionSchema = z.object({
 export const seriesSchema = sessionSchema.extend({
   everyDays: z.union([z.literal(7), z.literal(14), z.literal(28)]),
   count: z.number().int().min(1).max(26),
+});
+
+// Phase 4 ---------------------------------------------------------------------
+
+export const guestDetailsSchema = z.object({
+  shareToken: z.string().trim().max(60),
+  name: z.string().trim().min(1, "Please enter your name").max(80),
+  email: z.string().trim().toLowerCase().email("Please enter a valid email").max(120),
+  allergies: z.string().trim().max(300).default(""),
+  dietary: z.array(z.enum(dietaryKeys)).max(4).default([]),
+  messageOptIn: z.boolean().default(false),
+  pay: z.boolean().default(false),
+});
+export type GuestDetails = z.infer<typeof guestDetailsSchema>;
+
+export const passPurchaseSchema = z.object({
+  buyerName: z.string().trim().min(2, "Please enter your name").max(80),
+  buyerEmail: z.string().trim().toLowerCase().email("Please enter a valid email").max(120),
+  acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
 });

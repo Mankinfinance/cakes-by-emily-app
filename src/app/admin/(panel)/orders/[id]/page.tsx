@@ -10,6 +10,7 @@ import { nextStage, stageLabel } from "@/lib/domain/stages";
 import { DIETARY_FILTERS } from "@/lib/domain/types";
 import { siteUrl } from "@/lib/config";
 import { reviewLink } from "@/lib/services/common";
+import { refundButtonLabel } from "@/lib/services/refunds";
 import { OrderActions } from "./OrderActions";
 import { SendForApproval } from "./SendForApproval";
 import { PostUpdate } from "./PostUpdate";
@@ -27,6 +28,8 @@ export default async function AdminOrder({ params }: PageProps<"/admin/orders/[i
   ]);
   const media = await Promise.all(updates.map((u) => (u.mediaPath ? repo.mediaUrl(u.mediaPath) : Promise.resolve(null))));
   const next = nextStage(order.stage);
+  const settings = await repo.getSettings();
+  const cancelButton = refundButtonLabel(settings.autoRefunds, order.amountPaidCents, "Cancel order");
 
   return (
     <div className="grid gap-6">
@@ -46,7 +49,13 @@ export default async function AdminOrder({ params }: PageProps<"/admin/orders/[i
       <section className="card p-5">
         <Tracker stage={order.stage} />
         <div className="mt-4">
-          <OrderActions orderId={order.id} nextLabel={next ? stageLabel(next) : null} canCancel={order.stage !== "cancelled" && order.stage !== "collected"} />
+          <OrderActions
+            orderId={order.id}
+            nextLabel={next ? stageLabel(next) : null}
+            canCancel={order.stage !== "cancelled" && order.stage !== "collected"}
+            cancelLabel={cancelButton.label}
+            cancelConfirm={`${cancelButton.confirm} Any voucher or credit used comes back as credit, and the date is offered to the waitlist.`}
+          />
         </div>
         {order.stage === "collected" && (
           <p className="mt-3 break-all text-sm">
@@ -65,7 +74,10 @@ export default async function AdminOrder({ params }: PageProps<"/admin/orders/[i
           <div className="mt-3 rounded-xl bg-paper p-3 text-sm" data-testid="admin-cancellation">
             <p className="font-semibold">Cancelled by {order.cancellation.by === "emily" ? "you" : order.cancellation.by === "expired" ? "expiry (unpaid)" : "the customer"}</p>
             <p>{order.cancellation.summary}</p>
-            {order.cancellation.refundCents > 0 && <p className="mt-1 font-semibold text-rose-dark">Refund {formatAud(order.cancellation.refundCents)} in the Stripe dashboard.</p>}
+            {(order.cancellation.autoRefundedCents ?? 0) > 0 && <p className="mt-1">Refunded {formatAud(order.cancellation.autoRefundedCents!)} through Stripe automatically.</p>}
+            {order.cancellation.refundCents - (order.cancellation.autoRefundedCents ?? 0) > 0 && (
+              <p className="mt-1 font-semibold text-rose-dark">Refund {formatAud(order.cancellation.refundCents - (order.cancellation.autoRefundedCents ?? 0))} in the Stripe dashboard.</p>
+            )}
             {order.cancellation.creditCents > 0 && <p>{formatAud(order.cancellation.creditCents)} issued as a credit code.</p>}
           </div>
         )}

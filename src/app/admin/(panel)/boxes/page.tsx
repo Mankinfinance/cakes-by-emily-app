@@ -5,12 +5,13 @@ import { formatDateLong, formatTime12, todayInBusinessTz } from "@/lib/domain/da
 import { formatAud } from "@/lib/domain/money";
 import { boxOrderAction } from "../actions";
 import { ActionButton } from "../ActionButton";
+import { refundButtonLabel } from "@/lib/services/refunds";
 import { BoxEditor } from "./BoxEditor";
 
 export default async function BoxesPage() {
   await requireAdmin();
   const repo = await getRepo();
-  const [boxes, orders] = await Promise.all([repo.listBoxes(), repo.listBoxOrders()]);
+  const [boxes, orders, settings] = await Promise.all([repo.listBoxes(), repo.listBoxOrders(), repo.getSettings()]);
   const today = todayInBusinessTz();
   return (
     <div className="grid gap-6">
@@ -40,7 +41,11 @@ export default async function BoxesPage() {
                   <span className="text-muted">{o.status === "paid" ? "Paid" : o.status === "collected" ? "Collected" : "Cancelled"}</span>
                   {o.status === "paid" && <ActionButton action={boxOrderAction.bind(null, o.id, "collected")} label="Collected" />}
                   {o.status === "paid" && (
-                    <ActionButton action={boxOrderAction.bind(null, o.id, "cancel")} label="Cancel" confirmText="Cancel this pre-order? Refund it in Stripe separately." />
+                    <ActionButton
+                      action={boxOrderAction.bind(null, o.id, "cancel")}
+                      label={refundButtonLabel(settings.autoRefunds, o.amountPaidCents, "Cancel").label}
+                      confirmText={refundButtonLabel(settings.autoRefunds, o.amountPaidCents, "Cancel this pre-order").confirm}
+                    />
                   )}
                 </span>
               </li>

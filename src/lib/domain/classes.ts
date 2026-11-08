@@ -87,3 +87,72 @@ export function classIcs(opts: { uid: string; title: string; date: string; start
     "",
   ].join("\r\n");
 }
+
+// Phase 4 ---------------------------------------------------------------------
+
+/**
+ * Price with class pass credits. Each credit covers one seat. The group
+ * discount still depends on the total seats, and applies to the seats being
+ * paid for.
+ */
+export function classPriceWithPass(
+  unitCents: number,
+  seats: number,
+  credits: number,
+  s: { groupDiscountMinSeats: number; groupDiscountPercent: number },
+): ClassPrice & { creditsUsed: number } {
+  const used = Math.max(0, Math.min(seats, credits));
+  const paidSeats = seats - used;
+  const subtotal = unitCents * paidSeats;
+  const discount = seats >= s.groupDiscountMinSeats ? Math.round((subtotal * s.groupDiscountPercent) / 100) : 0;
+  return { subtotalCents: subtotal, discountCents: discount, totalCents: subtotal - discount, creditsUsed: used };
+}
+
+export type ClassCancelWindow = "full" | "credit" | "none" | "emily";
+
+export interface ClassCancelOutcome {
+  window: ClassCancelWindow;
+  refundCents: number;
+  creditCents: number;
+  keptCents: number;
+  voucherReturnedCents: number;
+  passCreditsReturned: number;
+  summary: string;
+}
+
+const days = (n: number) => (n === 1 ? "1 day" : `${n} days`);
+const aud = (c: number) => new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", minimumFractionDigits: c % 100 ? 2 : 0 }).format(c / 100);
+
+/** What happens to the money (and pass credits) when a class booking is cancelled. */
+export function classCancellationOutcome(
+  b: { amountPaidCents: number; voucherAppliedCents?: number; passCredits?: number },
+  s: { classFullRefundDays: number; classCreditDays: number },
+  daysOut: number,
+  by: "customer" | "emily" = "customer",
+): ClassCancelOutcome {
+  const cash = Math.max(0, b.amountPaidCents);
+  const voucher = Math.max(0, b.voucherAppliedCents ?? 0);
+  const credits = Math.max(0, b.passCredits ?? 0);
+  const extras =
+    (voucher ? ` The ${aud(voucher)} voucher or credit you used comes back as credit.` : "") +
+    (credits ? ` Your ${credits} class pass ${credits === 1 ? "credit comes" : "credits come"} back.` : "");
+  if (by === "emily") {
+    return { window: "emily", refundCents: cash, creditCents: 0, keptCents: 0, voucherReturnedCents: voucher, passCreditsReturned: credits, summary: `Emily cancelled this booking, so everything paid (${aud(cash)}) is refunded.${extras}` };
+  }
+  const when = `Today is ${days(daysOut)} before the class.`;
+  if (daysOut >= s.classFullRefundDays) {
+    return { window: "full", refundCents: cash, creditCents: 0, keptCents: 0, voucherReturnedCents: voucher, passCreditsReturned: credits, summary: `${when} If you cancel, you'll get ${aud(cash)} back.${extras}` };
+  }
+  if (daysOut >= s.classCreditDays) {
+    return { window: "credit", refundCents: 0, creditCents: cash, keptCents: 0, voucherReturnedCents: voucher, passCreditsReturned: credits, summary: `${when} If you cancel, the ${aud(cash)} you paid becomes credit.${extras}` };
+  }
+  return {
+    window: "none",
+    refundCents: 0,
+    creditCents: 0,
+    keptCents: cash,
+    voucherReturnedCents: voucher,
+    passCreditsReturned: 0,
+    summary: `${when} Cancellations inside ${days(s.classCreditDays)} are not refundable, and class pass credits aren't returned.${voucher ? ` The ${aud(voucher)} voucher or credit you used still comes back as credit.` : ""}`,
+  };
+}

@@ -10,11 +10,15 @@ import type {
   Automation,
   BoxOrder,
   ClassBooking,
+  ClassPass,
+  ClassPhoto,
   ClassSession,
   ClassType,
   CorporateOrder,
   CorporatePackage,
+  PrivateGuest,
   PrivateRequest,
+  RefundRecord,
   Referral,
   ReferralCode,
   Review,
@@ -72,6 +76,13 @@ interface Store {
   bookings: ClassBooking[];
   bookingMessages: { bookingId: string; key: string }[];
   privateRequests: PrivateRequest[];
+  guests: PrivateGuest[];
+  photos: ClassPhoto[];
+  passes: ClassPass[];
+  passRedemptions: { passId: string; bookingId: string; credits: number }[];
+  targetRedemptions: { voucherId: string; kind: string; targetId: string; amountCents: number }[];
+  refunds: RefundRecord[];
+  stampRewards: { email: string; n: number; orderId: string }[];
 }
 
 function freshStore(): Store {
@@ -102,6 +113,13 @@ function freshStore(): Store {
     bookings: [],
     bookingMessages: [],
     privateRequests: [],
+    guests: [],
+    photos: [],
+    passes: [],
+    passRedemptions: [],
+    targetRedemptions: [],
+    refunds: [],
+    stampRewards: [],
   };
 }
 
@@ -261,7 +279,7 @@ export const memoryRepository: Repository = {
   },
 
   async createPayment(p) {
-    const payment: Payment = { ...p, id: randomUUID(), status: "pending", createdAt: new Date().toISOString() };
+    const payment: Payment = { refundedCents: 0, stripePaymentIntent: null, ...p, id: randomUUID(), status: "pending", createdAt: stamp() };
     store().payments.push(payment);
     return clone(payment);
   },
@@ -310,7 +328,21 @@ export const memoryRepository: Repository = {
       const r = s.privateRequests.find((x) => x.id === payment.privateRequestId);
       if (r) {
         r.amountPaidCents += payment.amountCents;
-        if (r.status === "accepted") r.status = "paid";
+        if (r.status === "accepted" && payment.kind === "private_deposit") r.status = "paid";
+      }
+      if (payment.kind === "private_share" && payment.shareHoldKey) {
+        for (const g of s.guests) {
+          if (g.requestId === payment.privateRequestId && g.holdKey === payment.shareHoldKey && g.status === "open") {
+            g.status = "paid";
+            g.paidAt = new Date().toISOString();
+          }
+        }
+      }
+    } else if (payment.passId) {
+      const pass = s.passes.find((x) => x.id === payment.passId);
+      if (pass && pass.status === "pending") {
+        pass.status = "active";
+        pass.creditsLeft = pass.creditsTotal;
       }
     }
     return true;
@@ -442,7 +474,7 @@ export const memoryRepository: Repository = {
     return true;
   },
   async createBoxOrder(input) {
-    const o: BoxOrder = { ...clone(input), amountPaidCents: 0, status: "awaiting_payment", kitchenDone: false, createdAt: new Date().toISOString() };
+    const o: BoxOrder = { voucherId: null, voucherAppliedCents: 0, ...clone(input), amountPaidCents: 0, status: "awaiting_payment", kitchenDone: false, createdAt: new Date().toISOString() };
     store().boxOrders.push(o);
     return clone(o);
   },
@@ -544,7 +576,7 @@ export const memoryRepository: Repository = {
     if (p) Object.assign(p, clone(patch));
   },
   async createCorporateOrder(input) {
-    const o: CorporateOrder = { ...clone(input), amountPaidCents: 0, status: "awaiting_payment", kitchenDone: false, createdAt: new Date().toISOString() };
+    const o: CorporateOrder = { voucherId: null, voucherAppliedCents: 0, ...clone(input), amountPaidCents: 0, status: "awaiting_payment", kitchenDone: false, createdAt: new Date().toISOString() };
     store().corporateOrders.push(o);
     return clone(o);
   },
@@ -673,7 +705,17 @@ export const memoryRepository: Repository = {
     if (x) x.booked = Math.max(0, x.booked - seats);
   },
   async createBooking(input) {
-    const b: ClassBooking = { ...clone(input), amountPaidCents: 0, status: "awaiting_payment", cancellation: null, createdAt: new Date().toISOString() };
+    const b: ClassBooking = {
+      passId: null,
+      passCredits: 0,
+      voucherId: null,
+      voucherAppliedCents: 0,
+      ...clone(input),
+      amountPaidCents: 0,
+      status: "awaiting_payment",
+      cancellation: null,
+      createdAt: new Date().toISOString(),
+    };
     store().bookings.push(b);
     return clone(b);
   },
@@ -710,6 +752,10 @@ export const memoryRepository: Repository = {
     if (x) x.booked = Math.max(0, x.booked - b.seats);
     return true;
   },
+  async setBookingCancellation(id, record) {
+    const b = store().bookings.find((x) => x.id === id);
+    if (b) b.cancellation = clone(record);
+  },
   async claimBookingMessage(bookingId, key) {
     const s = store();
     if (s.bookingMessages.some((m) => m.bookingId === bookingId && m.key === key)) return false;
@@ -721,7 +767,16 @@ export const memoryRepository: Repository = {
     s.bookingMessages = s.bookingMessages.filter((m) => !(m.bookingId === bookingId && m.key === key));
   },
   async createPrivateRequest(input) {
-    const r: PrivateRequest = { ...clone(input), status: "requested", payTokenHash: null, amountPaidCents: 0, createdAt: new Date().toISOString() };
+    const r: PrivateRequest = {
+      ...clone(input),
+      status: "requested",
+      payTokenHash: null,
+      amountPaidCents: 0,
+      createdAt: new Date().toISOString(),
+      shareTokenHash: null,
+      lastNudgeAt: null,
+      cancellation: null,
+    };
     store().privateRequests.push(r);
     return clone(r);
   },
@@ -747,5 +802,234 @@ export const memoryRepository: Repository = {
   async salesSummary(from, to) {
     const s = store();
     return summarise(s.orders, s.payments, from, to, (iso) => todayInBusinessTz(new Date(iso)));
+  },
+
+  // Phase 4 -----------------------------------------------------------------
+  async setPrivateShareToken(id, tokenHash) {
+    const r = store().privateRequests.find((x) => x.id === id);
+    if (!r || r.shareTokenHash) return false;
+    r.shareTokenHash = tokenHash;
+    return true;
+  },
+  async getPrivateRequestByShareHash(hash) {
+    const r = store().privateRequests.find((x) => x.shareTokenHash === hash);
+    return r ? clone(r) : null;
+  },
+  async claimNudge(id, before, now) {
+    const r = store().privateRequests.find((x) => x.id === id);
+    if (!r || (r.lastNudgeAt && r.lastNudgeAt > before)) return false;
+    r.lastNudgeAt = now;
+    return true;
+  },
+  async cancelPrivateOnce(id, record) {
+    const r = store().privateRequests.find((x) => x.id === id);
+    if (!r || r.status === "cancelled" || r.status === "declined") return false;
+    r.status = "cancelled";
+    r.cancellation = clone(record);
+    return true;
+  },
+  async createGuestSlots(requestId, shares) {
+    const s = store();
+    if (s.guests.some((g) => g.requestId === requestId)) return;
+    shares.forEach((cents, i) =>
+      s.guests.push({
+        id: randomUUID(),
+        requestId,
+        slot: i + 1,
+        name: "",
+        email: "",
+        allergies: "",
+        dietary: [],
+        messageOptIn: false,
+        shareCents: cents,
+        status: "open",
+        holdKey: null,
+        holdUntil: null,
+        paidAt: null,
+        detailsAt: null,
+      }),
+    );
+  },
+  async listGuests(requestId) {
+    return clone(store().guests.filter((g) => g.requestId === requestId)).sort((a, b) => a.slot - b.slot);
+  },
+  async getGuest(id) {
+    const g = store().guests.find((x) => x.id === id);
+    return g ? clone(g) : null;
+  },
+  async claimGuestSlot(requestId, d) {
+    const g = store()
+      .guests.filter((x) => x.requestId === requestId && !x.name)
+      .sort((a, b) => a.slot - b.slot)[0];
+    if (!g) return null;
+    Object.assign(g, clone(d), { detailsAt: new Date().toISOString() });
+    return g.id;
+  },
+  async updateGuestDetails(id, d) {
+    const g = store().guests.find((x) => x.id === id);
+    if (g) Object.assign(g, clone(d), { detailsAt: new Date().toISOString() });
+  },
+  async holdShares(ids, holdKey, until) {
+    const now = new Date().toISOString();
+    const list = store().guests.filter((g) => ids.includes(g.id));
+    if (list.length === 0 || list.length !== new Set(ids).size) return false;
+    if (!list.every((g) => g.status === "open" && (!g.holdKey || !g.holdUntil || g.holdUntil <= now))) return false;
+    for (const g of list) Object.assign(g, { holdKey, holdUntil: until });
+    return true;
+  },
+
+  async addClassPhoto(p) {
+    const photo: ClassPhoto = { ...clone(p), createdAt: stamp() };
+    store().photos.push(photo);
+    return clone(photo);
+  },
+  async listClassPhotos(sessionId) {
+    return clone(store().photos.filter((p) => p.sessionId === sessionId)).sort(byCreated);
+  },
+  async getClassPhoto(id) {
+    const p = store().photos.find((x) => x.id === id);
+    return p ? clone(p) : null;
+  },
+  async deleteClassPhoto(id) {
+    const s = store();
+    s.photos = s.photos.filter((p) => p.id !== id);
+  },
+
+  async createPass(p) {
+    const s = store();
+    if (s.passes.some((x) => x.codeHash === p.codeHash)) throw new Error("Duplicate pass code");
+    const pass: ClassPass = { ...clone(p), createdAt: new Date().toISOString() };
+    s.passes.push(pass);
+    return clone(pass);
+  },
+  async getPassById(id) {
+    const p = store().passes.find((x) => x.id === id);
+    return p ? clone(p) : null;
+  },
+  async getPassByCodeHash(hash) {
+    const p = store().passes.find((x) => x.codeHash === hash);
+    return p ? clone(p) : null;
+  },
+  async listPasses() {
+    return clone(store().passes).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  },
+  async redeemPass(codeHash, bookingId, max, today) {
+    const s = store();
+    if (max <= 0) return 0;
+    const p = s.passes.find((x) => x.codeHash === codeHash);
+    const b = s.bookings.find((x) => x.id === bookingId);
+    if (!p || !b || p.status !== "active" || p.expiresOn < today || p.creditsLeft <= 0 || b.passId) return 0;
+    const n = Math.min(p.creditsLeft, max);
+    p.creditsLeft -= n;
+    s.passRedemptions.push({ passId: p.id, bookingId, credits: n });
+    b.passId = p.id;
+    b.passCredits = n;
+    return n;
+  },
+  async returnPass(bookingId, today) {
+    const s = store();
+    const b = s.bookings.find((x) => x.id === bookingId);
+    if (!b?.passId) return 0;
+    const net = s.passRedemptions.filter((r) => r.bookingId === bookingId && r.passId === b.passId).reduce((sum, r) => sum + r.credits, 0);
+    if (net <= 0) return 0;
+    const p = s.passes.find((x) => x.id === b.passId)!;
+    p.creditsLeft = Math.min(p.creditsTotal, p.creditsLeft + net);
+    const extended = new Date(`${today}T00:00:00Z`);
+    extended.setUTCDate(extended.getUTCDate() + 90);
+    const ext = extended.toISOString().slice(0, 10);
+    if (p.expiresOn < ext) p.expiresOn = ext;
+    s.passRedemptions.push({ passId: p.id, bookingId, credits: -net });
+    return net;
+  },
+  async updateBookingPrice(id, p) {
+    const b = store().bookings.find((x) => x.id === id);
+    if (b) Object.assign(b, p);
+  },
+  async markBookingPaidWithoutPayment(id) {
+    const b = store().bookings.find((x) => x.id === id);
+    if (!b || b.status !== "awaiting_payment") return false;
+    b.status = "paid";
+    return true;
+  },
+  async markBoxPaidWithoutPayment(id) {
+    const b = store().boxOrders.find((x) => x.id === id);
+    if (!b || b.status !== "awaiting_payment") return false;
+    b.status = "paid";
+    return true;
+  },
+
+  async redeemVoucherFor(kind, codeHash, targetId, maxCents, today) {
+    const s = store();
+    if (maxCents <= 0) return 0;
+    const v = s.vouchers.find((x) => x.codeHash === codeHash);
+    const target: { voucherId?: string | null; voucherAppliedCents?: number } | undefined =
+      kind === "box" ? s.boxOrders.find((x) => x.id === targetId) : kind === "corporate" ? s.corporateOrders.find((x) => x.id === targetId) : s.bookings.find((x) => x.id === targetId);
+    if (!v || !target || v.status !== "active" || v.expiresOn < today || v.balanceCents <= 0 || target.voucherId) return 0;
+    const amount = Math.min(v.balanceCents, maxCents);
+    v.balanceCents -= amount;
+    s.targetRedemptions.push({ voucherId: v.id, kind, targetId, amountCents: amount });
+    target.voucherId = v.id;
+    target.voucherAppliedCents = amount;
+    return amount;
+  },
+  async returnVoucherFor(kind, targetId, today) {
+    const s = store();
+    const target = kind === "box" ? s.boxOrders.find((x) => x.id === targetId) : kind === "corporate" ? s.corporateOrders.find((x) => x.id === targetId) : s.bookings.find((x) => x.id === targetId);
+    if (!target?.voucherId) return { amount: 0, toVoucher: false };
+    const net = s.targetRedemptions.filter((r) => r.kind === kind && r.targetId === targetId && r.voucherId === target.voucherId).reduce((sum, r) => sum + r.amountCents, 0);
+    if (net <= 0) return { amount: 0, toVoucher: false };
+    const v = s.vouchers.find((x) => x.id === target.voucherId)!;
+    const ok = v.status === "active" && v.expiresOn >= today;
+    if (ok) v.balanceCents = Math.min(v.amountCents, v.balanceCents + net);
+    s.targetRedemptions.push({ voucherId: v.id, kind, targetId, amountCents: -net });
+    return { amount: net, toVoucher: ok };
+  },
+
+  async setPaymentIntent(sessionId, intentId) {
+    const p = store().payments.find((x) => x.stripeSessionId === sessionId);
+    if (p && !p.stripePaymentIntent) p.stripePaymentIntent = intentId;
+  },
+  async listPaidPayments(kind, id) {
+    const key = ({ order: "orderId", box: "boxOrderId", corporate: "corporateOrderId", booking: "classBookingId", private: "privateRequestId" } as const)[kind];
+    return clone(store().payments.filter((p) => p.status === "paid" && p[key] === id));
+  },
+  async recordRefund(r) {
+    const s = store();
+    s.refunds.push({ ...clone(r), id: randomUUID(), createdAt: new Date().toISOString() });
+    if (r.status === "succeeded") {
+      const p = s.payments.find((x) => x.id === r.paymentId);
+      if (p) p.refundedCents = Math.min(p.amountCents, (p.refundedCents ?? 0) + r.amountCents);
+    }
+  },
+  async listRefunds(paymentIds) {
+    return clone(store().refunds.filter((r) => paymentIds.includes(r.paymentId)));
+  },
+  async recordChargeRefunded(eventId, intentId, amountRefunded) {
+    const s = store();
+    if (s.processedEvents.has(eventId)) return false;
+    s.processedEvents.add(eventId);
+    const list = s.payments.filter((p) => p.stripePaymentIntent === intentId);
+    for (const p of list) p.refundedCents = Math.min(p.amountCents, Math.max(p.refundedCents ?? 0, amountRefunded));
+    return list.length > 0;
+  },
+
+  async claimStampReward(email, earned, orderId) {
+    const s = store();
+    const e = email.toLowerCase();
+    if (s.stampRewards.some((r) => r.orderId === orderId)) return 0;
+    for (let n = 1; n <= earned; n++) {
+      if (!s.stampRewards.some((r) => r.email === e && r.n === n)) {
+        s.stampRewards.push({ email: e, n, orderId });
+        return n;
+      }
+    }
+    return 0;
+  },
+  async releaseStampReward(orderId) {
+    const s = store();
+    s.stampRewards = s.stampRewards.filter((r) => r.orderId !== orderId);
+  },
+  async countStampRewards(email) {
+    return store().stampRewards.filter((r) => r.email === email.toLowerCase()).length;
   },
 };

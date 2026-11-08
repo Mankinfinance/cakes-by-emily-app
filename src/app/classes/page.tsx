@@ -72,7 +72,21 @@ export default async function ClassesPage({ searchParams }: PageProps<"/classes"
           </ul>
         )}
 
-        <section className="card mt-10 flex flex-col items-start gap-3 p-6 sm:flex-row sm:items-center sm:justify-between">
+        {settings.passEnabled && (
+          <section className="card mt-10 flex flex-col items-start gap-3 p-6 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-serif text-2xl">{settings.passCredits}-class pass</h2>
+              <p className="mt-1 text-muted">
+                {settings.passCredits} seats for {formatAud(settings.passPriceCents)}, valid {settings.passValidMonths} months.
+              </p>
+            </div>
+            <Link href="/classes/pass" className="btn btn-ghost shrink-0" data-testid="pass-link">
+              Buy a pass
+            </Link>
+          </section>
+        )}
+
+        <section className="card mt-6 flex flex-col items-start gap-3 p-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="font-serif text-2xl">Private classes and parties</h2>
             <p className="mt-1 text-muted">Hens, birthdays, team days and kids&apos; parties. Choose a package and a date, and Emily will confirm.</p>

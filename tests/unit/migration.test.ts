@@ -58,6 +58,8 @@ describe("database migration", () => {
       "box_orders",
       "catalogue_items",
       "class_bookings",
+      "class_passes",
+      "class_photos",
       "class_sessions",
       "class_types",
       "corporate_orders",
@@ -67,14 +69,18 @@ describe("database migration", () => {
       "order_items",
       "order_updates",
       "orders",
+      "pass_redemptions",
       "payments",
       "peak_dates",
+      "private_guests",
       "private_requests",
       "referral_codes",
       "referrals",
+      "refunds",
       "reviews",
       "seasonal_boxes",
       "settings",
+      "stamp_rewards",
       "stripe_events",
       "voucher_redemptions",
       "vouchers",
@@ -424,5 +430,150 @@ describe("phase 3 migration", () => {
       topOccasions: app.topOccasions,
     });
     expect(app).toMatchObject({ orders: 2, revenueCents: 30000, depositsCents: 10000 });
+  });
+});
+
+describe("phase 4 migration", () => {
+  const REQ = "80000000-0000-4000-8000-000000000001";
+
+  async function privateRequest(id = REQ, status = "paid") {
+    await db.query(
+      `insert into private_requests (id, reference, package_key, package_name, guests, per_person_cents, deposit_cents, estimate_cents, preferred_date, preferred_time, contact_name, email, phone, status)
+       values ($1, $2, 'deluxe', 'Deluxe', 3, 12000, 15000, 36000, '2027-01-16', '14:00', 'Jo', 'jo@example.com', '0400000000', $3)`,
+      [id, `PVT-${id.slice(-5)}`, status],
+    );
+    for (const [slot, cents] of [[1, 7000], [2, 7000], [3, 7000]]) {
+      await db.query("insert into private_guests (request_id, slot, share_cents) values ($1, $2, $3)", [id, slot, cents]);
+    }
+  }
+  const guestIds = async (id = REQ) => (await db.query<{ id: string }>("select id from private_guests where request_id = $1 order by slot", [id])).rows.map((r) => r.id);
+
+  it("blocks customers (anon) from every new table", async () => {
+    await db.exec("set role anon");
+    for (const t of ["private_guests", "class_photos", "class_passes", "pass_redemptions", "refunds", "stamp_rewards"]) {
+      const res = await db.query(`select * from ${t}`);
+      expect(res.rows, t).toHaveLength(0);
+    }
+    await db.exec("reset role");
+  });
+
+  it("gives each guest their own place, until every place is taken", async () => {
+    await privateRequest();
+    const claim = async (name: string) =>
+      (await db.query<{ id: string | null }>("select claim_guest_slot($1, $2, 'g@example.com', 'Nuts', '{}', false) as id", [REQ, name])).rows[0].id;
+    const results = await Promise.all(["Ann", "Bo", "Cy", "Di"].map(claim));
+    expect(results.filter(Boolean)).toHaveLength(3);
+    expect(new Set(results.filter(Boolean)).size).toBe(3);
+  });
+
+  it("never lets two checkouts hold the same share", async () => {
+    const id = "80000000-0000-4000-8000-000000000002";
+    await privateRequest(id);
+    const [a, b, c] = await guestIds(id);
+    const hold = async (ids: string[], key: string) =>
+      (await db.query<{ ok: boolean }>("select hold_shares($1::uuid[], $2, now() + interval '30 minutes') as ok", [ids, key])).rows[0].ok;
+    const results = await Promise.all([
+      hold([a], "90000000-0000-4000-8000-000000000001"),
+      hold([a, b, c], "90000000-0000-4000-8000-000000000002"),
+      hold([a], "90000000-0000-4000-8000-000000000003"),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    // An expired hold can be taken over.
+    await db.query("update private_guests set hold_until = now() - interval '1 minute' where request_id = $1", [id]);
+    expect(await hold([b], "90000000-0000-4000-8000-000000000004")).toBe(true);
+  });
+
+  it("marks the held shares paid exactly once when the payment arrives", async () => {
+    const id = "80000000-0000-4000-8000-000000000003";
+    await privateRequest(id);
+    const [a, b] = await guestIds(id);
+    const key = "90000000-0000-4000-8000-000000000010";
+    await db.query("select hold_shares($1::uuid[], $2, now() + interval '30 minutes')", [[a, b], key]);
+    await db.query(`insert into payments (private_request_id, kind, amount_cents, stripe_session_id, share_hold_key) values ($1, 'private_share', 14000, 'cs_share_1', $2)`, [id, key]);
+    expect((await db.query<{ ok: boolean }>("select record_payment_once('evt_share_1', 'cs_share_1') as ok")).rows[0].ok).toBe(true);
+    expect((await db.query<{ ok: boolean }>("select record_payment_once('evt_share_2', 'cs_share_1') as ok")).rows[0].ok).toBe(false);
+    const rows = await db.query<{ status: string }>("select status from private_guests where request_id = $1 order by slot", [id]);
+    expect(rows.rows.map((r) => r.status)).toEqual(["paid", "paid", "open"]);
+    const r = await db.query<{ status: string; amount_paid_cents: number }>("select status, amount_paid_cents from private_requests where id = $1", [id]);
+    expect(r.rows[0]).toEqual({ status: "paid", amount_paid_cents: 14000 });
+  });
+
+  it("uses class pass credits atomically and gives them back once", async () => {
+    await db.query("insert into class_sessions (id, class_type_id, date, start_time, seats) values ('a1000000-0000-4000-8000-000000000001', 'class-florals', '2027-01-09', '14:00', 8)");
+    const book = async (id: string) =>
+      db.query(
+        `insert into class_bookings (id, reference, token_hash, session_id, seats, guests, contact_name, email, phone, unit_price_cents, total_cents, terms_accepted_at)
+         values ($1, $2, $3, 'a1000000-0000-4000-8000-000000000001', 2, '[]', 'Ann', 'ann@example.com', '0400000000', 9500, 19000, now())`,
+        [id, `CLS-${id.slice(-5)}`, `hash-${id}`],
+      );
+    const b1 = "a2000000-0000-4000-8000-000000000001";
+    const b2 = "a2000000-0000-4000-8000-000000000002";
+    await book(b1);
+    await book(b2);
+    await db.query(
+      `insert into class_passes (id, code_hash, code_last4, credits_total, credits_left, status, buyer_email, expires_on) values ('a3000000-0000-4000-8000-000000000001', 'hash-pass', 'ABCD', 3, 3, 'active', 'ann@example.com', '2027-11-01')`,
+    );
+    const redeem = async (b: string) => (await db.query<{ n: number }>("select redeem_pass('hash-pass', $1, 2, '2026-11-08') as n", [b])).rows[0].n;
+    const [n1, n2] = await Promise.all([redeem(b1), redeem(b2)]);
+    expect(n1 + n2).toBe(3);
+    expect(await redeem(b1)).toBe(0); // once per booking
+    const left = async () => (await db.query<{ n: number }>("select credits_left as n from class_passes where code_hash = 'hash-pass'")).rows[0].n;
+    expect(await left()).toBe(0);
+    expect((await db.query<{ n: number }>("select return_pass($1, '2026-11-08') as n", [b1])).rows[0].n).toBe(n1);
+    expect((await db.query<{ n: number }>("select return_pass($1, '2026-11-08') as n", [b1])).rows[0].n).toBe(0);
+    expect(await left()).toBe(n1);
+    await expect(db.query("update class_passes set credits_left = 4 where code_hash = 'hash-pass'")).rejects.toThrow();
+  });
+
+  it("redeems vouchers on boxes, corporate orders and bookings, once each, and returns them once", async () => {
+    await db.query(
+      `insert into vouchers (id, kind, code_hash, code_last4, amount_cents, balance_cents, status, buyer_email, expires_on) values ('a4000000-0000-4000-8000-000000000001', 'gift', 'hash-v-everywhere', 'WXYZ', 10000, 10000, 'active', 'k@example.com', '2027-11-01')`,
+    );
+    await db.query("update seasonal_boxes set cap = 50 where id = 'b0000000-0000-4000-8000-000000000001'");
+    await db.query(
+      `insert into box_orders (id, reference, token_hash, box_id, box_name, quantity, unit_price_cents, total_cents, customer_name, email, phone, pickup_date, pickup_slot)
+       values ('a5000000-0000-4000-8000-000000000001', 'BOX-VVVVV', 'hash-box-v', 'b0000000-0000-4000-8000-000000000001', 'Christmas', 1, 4500, 4500, 'Kim', 'k@example.com', '0400000000', '2026-12-20', '10:00')`,
+    );
+    const redeem = async (kind: string, id: string, max: number) =>
+      (await db.query<{ n: number }>("select redeem_voucher_for($1, 'hash-v-everywhere', $2, $3, '2026-11-08') as n", [kind, id, max])).rows[0].n;
+    expect(await redeem("box", "a5000000-0000-4000-8000-000000000001", 4500)).toBe(4500);
+    expect(await redeem("box", "a5000000-0000-4000-8000-000000000001", 4500)).toBe(0);
+    expect(await redeem("nonsense", "a5000000-0000-4000-8000-000000000001", 4500)).toBe(0);
+    const bal = async () => (await db.query<{ b: number }>("select balance_cents as b from vouchers where code_hash = 'hash-v-everywhere'")).rows[0].b;
+    expect(await bal()).toBe(5500);
+    const back = await db.query<{ amount: number; to_voucher: boolean }>("select * from return_voucher_for('box', 'a5000000-0000-4000-8000-000000000001', '2026-11-08')");
+    expect(back.rows[0]).toEqual({ amount: 4500, to_voucher: true });
+    expect((await db.query<{ amount: number }>("select * from return_voucher_for('box', 'a5000000-0000-4000-8000-000000000001', '2026-11-08')")).rows[0].amount).toBe(0);
+    expect(await bal()).toBe(10000);
+  });
+
+  it("records refunds from Stripe's charge.refunded once, never above the payment", async () => {
+    const order = "a6000000-0000-4000-8000-000000000001";
+    await insertOrder(order, "hash-refund-order");
+    await db.query(`insert into payments (order_id, kind, amount_cents, stripe_session_id, stripe_payment_intent, status) values ($1, 'deposit', 6500, 'cs_ref_1', 'pi_ref_1', 'paid')`, [order]);
+    const call = async (evt: string, amount: number) => (await db.query<{ ok: boolean }>("select record_charge_refunded($1, 'pi_ref_1', $2) as ok", [evt, amount])).rows[0].ok;
+    expect(await call("evt_r1", 2000)).toBe(true);
+    expect(await call("evt_r1", 9000)).toBe(false);
+    expect(await call("evt_r2", 99999)).toBe(true);
+    expect((await db.query<{ n: number }>("select refunded_cents as n from payments where stripe_session_id = 'cs_ref_1'")).rows[0].n).toBe(6500);
+    await expect(db.query("update payments set refunded_cents = 7000 where stripe_session_id = 'cs_ref_1'")).rejects.toThrow();
+  });
+
+  it("lets only one order claim each stamp card reward", async () => {
+    const claim = (order: string) => db.query<{ n: number }>("select claim_stamp_reward('Sam@Example.com', 1, $1) as n", [order]);
+    const results = await Promise.all([claim("a7000000-0000-4000-8000-000000000001"), claim("a7000000-0000-4000-8000-000000000002")]);
+    expect(results.map((r) => r.rows[0].n).sort()).toEqual([0, 1]);
+    expect((await db.query<{ email: string }>("select email from stamp_rewards")).rows[0].email).toBe("sam@example.com");
+    // Two rewards earned: the second order can now claim reward 2.
+    expect((await db.query<{ n: number }>("select claim_stamp_reward('sam@example.com', 2, 'a7000000-0000-4000-8000-000000000003') as n")).rows[0].n).toBe(2);
+  });
+
+  it("only accepts class photo paths in the private class folder", async () => {
+    await expect(
+      db.query("insert into class_photos (session_id, path) values ('a1000000-0000-4000-8000-000000000001', '../../etc/passwd')"),
+    ).rejects.toThrow();
+    await db.query(
+      "insert into class_photos (session_id, path) values ('a1000000-0000-4000-8000-000000000001', 'classes/a1000000-0000-4000-8000-000000000001/photo-a8000000-0000-4000-8000-000000000001.jpg')",
+    );
   });
 });

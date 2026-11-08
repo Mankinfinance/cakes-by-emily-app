@@ -7,11 +7,16 @@ import type {
   BoxOrder,
   CatalogueItem,
   ClassBooking,
+  ClassPass,
+  ClassPhoto,
   ClassSession,
   ClassType,
   CorporateOrder,
   CorporatePackage,
+  PrivateGuest,
   PrivateRequest,
+  RefundRecord,
+  RefundTargetKind,
   Referral,
   ReferralCode,
   Review,
@@ -86,7 +91,7 @@ export type NewVoucher = Omit<Voucher, "createdAt">;
 export type NewWaitlistEntry = Omit<WaitlistEntry, "id" | "createdAt" | "status" | "offerTokenHash" | "offeredAt" | "offerExpiresAt" | "orderId">;
 export type NewCorporateOrder = Omit<CorporateOrder, "createdAt" | "amountPaidCents" | "status" | "kitchenDone">;
 export type NewClassBooking = Omit<ClassBooking, "createdAt" | "amountPaidCents" | "status" | "cancellation">;
-export type NewPrivateRequest = Omit<PrivateRequest, "createdAt" | "amountPaidCents" | "status" | "payTokenHash">;
+export type NewPrivateRequest = Omit<PrivateRequest, "createdAt" | "amountPaidCents" | "status" | "payTokenHash" | "shareTokenHash" | "lastNudgeAt" | "cancellation">;
 
 export interface Repository {
   // Catalogue and settings
@@ -247,6 +252,8 @@ export interface Repository {
   updateBookingGuests(id: string, guests: ClassBooking["guests"]): Promise<void>;
   /** Cancel once and give the seats back. */
   cancelBookingOnce(id: string, onlyUnpaid: boolean, record: ClassBooking["cancellation"]): Promise<boolean>;
+  /** Update the cancellation record (for example after refunds went through Stripe). */
+  setBookingCancellation(id: string, record: ClassBooking["cancellation"]): Promise<void>;
   claimBookingMessage(bookingId: string, key: string): Promise<boolean>;
   releaseBookingMessage(bookingId: string, key: string): Promise<void>;
   createPrivateRequest(r: NewPrivateRequest): Promise<PrivateRequest>;
@@ -258,4 +265,61 @@ export interface Repository {
 
   // Sales snapshot (money and counts for orders booked between two Sydney dates)
   salesSummary(from: string, to: string): Promise<SalesSummary>;
+
+  // Phase 4 -----------------------------------------------------------------
+  // Split payments and guest details for private classes
+  setPrivateShareToken(id: string, tokenHash: string): Promise<boolean>;
+  getPrivateRequestByShareHash(hash: string): Promise<PrivateRequest | null>;
+  /** Only if the last nudge was before `before` (or never): records `now` and returns true. */
+  claimNudge(id: string, before: string, now: string): Promise<boolean>;
+  cancelPrivateOnce(id: string, record: PrivateRequest["cancellation"]): Promise<boolean>;
+  createGuestSlots(requestId: string, shares: number[]): Promise<void>;
+  listGuests(requestId: string): Promise<PrivateGuest[]>;
+  getGuest(id: string): Promise<PrivateGuest | null>;
+  /** A guest adds their details to the first empty place. Null if every place is taken. */
+  claimGuestSlot(requestId: string, d: Pick<PrivateGuest, "name" | "email" | "allergies" | "dietary" | "messageOptIn">): Promise<string | null>;
+  updateGuestDetails(id: string, d: Pick<PrivateGuest, "name" | "email" | "allergies" | "dietary" | "messageOptIn">): Promise<void>;
+  /** Hold places for one checkout, all or nothing. */
+  holdShares(ids: string[], holdKey: string, until: string): Promise<boolean>;
+
+  // Class photo galleries
+  addClassPhoto(p: Omit<ClassPhoto, "createdAt">): Promise<ClassPhoto>;
+  listClassPhotos(sessionId: string): Promise<ClassPhoto[]>;
+  getClassPhoto(id: string): Promise<ClassPhoto | null>;
+  deleteClassPhoto(id: string): Promise<void>;
+
+  // Class passes
+  createPass(p: Omit<ClassPass, "createdAt">): Promise<ClassPass>;
+  getPassById(id: string): Promise<ClassPass | null>;
+  getPassByCodeHash(hash: string): Promise<ClassPass | null>;
+  listPasses(): Promise<ClassPass[]>;
+  /** Atomically use up to max credits on a booking (once per booking). Returns the credits used. */
+  redeemPass(codeHash: string, bookingId: string, max: number, today: string): Promise<number>;
+  /** Give a booking's pass credits back, once. */
+  returnPass(bookingId: string, today: string): Promise<number>;
+  /** Class bookings: set the price after pass credits (before payment). */
+  updateBookingPrice(id: string, p: { discountCents: number; totalCents: number }): Promise<void>;
+  /** awaiting_payment -> paid with nothing to pay (a pass or voucher covered it). */
+  markBookingPaidWithoutPayment(id: string): Promise<boolean>;
+  markBoxPaidWithoutPayment(id: string): Promise<boolean>;
+
+  // Vouchers on boxes, corporate orders and class bookings
+  redeemVoucherFor(kind: "box" | "corporate" | "booking", codeHash: string, targetId: string, maxCents: number, today: string): Promise<number>;
+  returnVoucherFor(kind: "box" | "corporate" | "booking", targetId: string, today: string): Promise<{ amount: number; toVoucher: boolean }>;
+
+  // Refunds
+  setPaymentIntent(sessionId: string, intentId: string): Promise<void>;
+  /** Paid payments for one thing (an order, box order, booking...). */
+  listPaidPayments(kind: RefundTargetKind, id: string): Promise<Payment[]>;
+  /** Record a refund attempt; a success also adds to the payment's refunded total. */
+  recordRefund(r: Omit<RefundRecord, "id" | "createdAt">): Promise<void>;
+  listRefunds(paymentIds: string[]): Promise<RefundRecord[]>;
+  /** Stripe's charge.refunded event, once per event. */
+  recordChargeRefunded(eventId: string, intentId: string, amountRefunded: number): Promise<boolean>;
+
+  // Stamp card
+  /** Claim the next unused reward (1..earned) for an order. Returns its number, or 0. */
+  claimStampReward(email: string, earned: number, orderId: string): Promise<number>;
+  releaseStampReward(orderId: string): Promise<void>;
+  countStampRewards(email: string): Promise<number>;
 }

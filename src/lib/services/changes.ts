@@ -23,7 +23,8 @@ import {
 } from "./email";
 import { expireClassOffers, releaseStaleBookings, runClassMessages } from "./classes";
 import { runScheduledMessages, sendEventMessage } from "./messages";
-import { issueCredit } from "./vouchers";
+import { refundTarget } from "./refunds";
+import { giveBackVoucherFor, issueCredit } from "./vouchers";
 import { expireOffers, offerNext } from "./waitlist";
 
 async function load(deps: LightDeps, orderId: string): Promise<Order> {
@@ -86,6 +87,16 @@ export async function cancelWithTerms(deps: LightDeps, orderId: string, by: "cus
     });
   }
   await giveBackVoucher(deps, order);
+  // A stamp card reward used on a cancelled order can be used again.
+  if (order.stampReward) await deps.repo.releaseStampReward(order.id);
+
+  // Automated refunds (when switched on); otherwise Emily refunds by hand.
+  const refund = await refundTarget(deps, "order", order.id, record.refundCents, `cancel-${by}`, `order ${order.reference}`);
+  if (refund.refundedCents > 0) {
+    record.autoRefundedCents = refund.refundedCents;
+    record.refundIds = refund.refundIds;
+    await deps.repo.updateOrder(order.id, { cancellation: record });
+  }
 
   await deps.repo.addUpdate({ orderId: order.id, kind: "stage", caption: "This order was cancelled.", mediaPath: null });
   await sendSafely(deps.mailer, cancellationEmail(order, record, orderLink(deps.baseUrl, order.id)));
@@ -196,16 +207,23 @@ export async function releaseStale(deps: LightDeps): Promise<{ orders: number; b
       orders++;
       await giveBackVoucher(deps, o);
       await deps.repo.voidReferral(o.id);
+      await deps.repo.releaseStampReward(o.id);
       await offerNext(deps, o.pickupDate);
     }
   }
   let boxes = 0;
   for (const b of await deps.repo.listStaleUnpaidBoxOrders(before)) {
-    if (await deps.repo.cancelBoxOrder(b.id, true)) boxes++;
+    if (await deps.repo.cancelBoxOrder(b.id, true)) {
+      boxes++;
+      await giveBackVoucherFor(deps, "box", b.id, { email: b.email, name: b.customerName, reference: b.reference });
+    }
   }
   let corporate = 0;
   for (const c of await deps.repo.listStaleUnpaidCorporate(before)) {
-    if (await deps.repo.setCorporateStatus(c.id, "cancelled", ["awaiting_payment"])) corporate++;
+    if (await deps.repo.setCorporateStatus(c.id, "cancelled", ["awaiting_payment"])) {
+      corporate++;
+      await giveBackVoucherFor(deps, "corporate", c.id, { email: c.email, name: c.contactName, reference: c.reference });
+    }
   }
   const bookings = await releaseStaleBookings(deps);
   return { orders, boxes, corporate, bookings };

@@ -28,7 +28,7 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
     value: String(s[key] as number),
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [key]: Number(e.target.value) }),
   });
-  const dollars = (key: "rushFeeCents" | "cancelAdminFeeCents") => ({
+  const dollars = (key: "rushFeeCents" | "cancelAdminFeeCents" | "passPriceCents") => ({
     value: String(s[key] / 100),
     onChange: (e: React.ChangeEvent<HTMLInputElement>) => setS({ ...s, [key]: Math.round(Number(e.target.value) * 100) }),
   });
@@ -162,6 +162,44 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
             <span>No cake orders on class days</span>
           </label>
         </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <label>
+            <span className="label">Class full refund (days or more before)</span>
+            <input type="number" min={0} className="field" {...num("classFullRefundDays")} />
+          </label>
+          <label>
+            <span className="label">Class credit instead (days or more before)</span>
+            <input type="number" min={0} className="field" {...num("classCreditDays")} />
+          </label>
+          <label>
+            <span className="label">Private class shares due (days before)</span>
+            <input type="number" min={0} className="field" {...num("splitDueDays")} />
+          </label>
+          <label className="flex items-center gap-2 sm:col-span-2 lg:col-span-3">
+            <input type="checkbox" checked={s.passEnabled} onChange={(e) => setS({ ...s, passEnabled: e.target.checked })} />
+            <span>Sell class passes</span>
+          </label>
+          <label>
+            <span className="label">Class pass price ($)</span>
+            <input type="number" min={1} className="field" {...dollars("passPriceCents")} />
+          </label>
+          <label>
+            <span className="label">Classes per pass</span>
+            <input type="number" min={1} className="field" {...num("passCredits")} />
+          </label>
+          <label>
+            <span className="label">Pass valid for (months)</span>
+            <input type="number" min={1} className="field" {...num("passValidMonths")} />
+          </label>
+        </div>
+        <h3 className="mt-6 font-semibold">Refunds</h3>
+        <label className="mt-2 flex items-start gap-2 rounded-xl border border-rose p-3 text-sm">
+          <input type="checkbox" className="mt-1" checked={s.autoRefunds} onChange={(e) => setS({ ...s, autoRefunds: e.target.checked })} data-testid="auto-refunds" />
+          <span>
+            <strong>Refund automatically through Stripe.</strong> When a cancellation leaves money to refund, the website sends the refund to Stripe straight away
+            instead of asking you to do it. Try it in Stripe test mode first. If Stripe refuses a refund, you&apos;ll get an email to do it by hand.
+          </span>
+        </label>
         <label className="mt-4 block">
           <span className="label">Extra notes added to the terms (optional)</span>
           <textarea className="field" rows={3} value={s.cancellationPolicy} onChange={(e) => setS({ ...s, cancellationPolicy: e.target.value })} />

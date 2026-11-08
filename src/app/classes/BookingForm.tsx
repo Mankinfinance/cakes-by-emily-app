@@ -21,6 +21,8 @@ export function BookingForm({ sessionId, unitCents, maxSeats, isSip, discount, c
   const [contact, setContact] = useState({ contactName: claim?.name ?? "", email: claim?.email ?? "", phone: claim?.phone ?? "" });
   const [adult, setAdult] = useState(false);
   const [terms, setTerms] = useState(false);
+  const [passCode, setPassCode] = useState("");
+  const [voucherCode, setVoucherCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const price = classPrice(unitCents, seats, discount);
@@ -38,6 +40,8 @@ export function BookingForm({ sessionId, unitCents, maxSeats, isSip, discount, c
         adultConfirmed: adult,
         acceptTerms: terms,
         waitlistToken: claim?.token ?? "",
+        passCode: passCode.trim(),
+        voucherCode: voucherCode.trim(),
       });
       window.location.assign(d.checkoutUrl);
     } catch (e) {
@@ -75,6 +79,17 @@ export function BookingForm({ sessionId, unitCents, maxSeats, isSip, discount, c
         <input className="field" type="email" placeholder="Email" aria-label="Email" value={contact.email} onChange={(e) => setContact({ ...contact, email: e.target.value })} data-testid="class-email" />
         <input className="field" type="tel" placeholder="Mobile" aria-label="Mobile" value={contact.phone} onChange={(e) => setContact({ ...contact, phone: e.target.value })} data-testid="class-phone" />
       </div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label>
+          <span className="label">Class pass code (optional)</span>
+          <input className="field uppercase" placeholder="XXXX-XXXX-XXXX-XXXX" value={passCode} onChange={(e) => setPassCode(e.target.value)} data-testid="class-pass-code" />
+          <span className="mt-1 block text-xs text-muted">Each seat uses one credit.</span>
+        </label>
+        <label>
+          <span className="label">Gift voucher or credit code (optional)</span>
+          <input className="field uppercase" placeholder="XXXX-XXXX-XXXX-XXXX" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value)} data-testid="class-voucher-code" />
+        </label>
+      </div>
       {isSip && (
         <label className="flex items-start gap-2 text-sm">
           <input type="checkbox" className="mt-1" checked={adult} onChange={(e) => setAdult(e.target.checked)} data-testid="class-adult" />
@@ -96,7 +111,7 @@ export function BookingForm({ sessionId, unitCents, maxSeats, isSip, discount, c
         <span className="font-semibold" data-testid="class-total">{formatAud(price.totalCents)}</span>
       </div>
       <button type="button" className="btn btn-primary" disabled={busy || !ready} onClick={submit} data-testid="class-pay">
-        {busy ? "Opening secure checkout..." : `Pay ${formatAud(price.totalCents)}`}
+        {busy ? "Opening secure checkout..." : passCode || voucherCode ? "Book (codes are taken off at checkout)" : `Pay ${formatAud(price.totalCents)}`}
       </button>
       {error && <p className="text-sm text-rose-dark" role="alert" data-testid="class-error">{error}</p>}
     </div>

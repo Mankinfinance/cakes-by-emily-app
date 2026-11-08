@@ -109,3 +109,38 @@ export async function checkCode(repo: Repository, code: string, today: string): 
   if (problem) return { ok: false, error: VOUCHER_PROBLEM_TEXT[problem] };
   return { ok: true, balanceCents: v!.balanceCents, kind: v!.kind, expiresOn: v!.expiresOn };
 }
+
+// Phase 4: vouchers on box orders, corporate orders and class bookings ----------
+
+export type VoucherTarget = "box" | "corporate" | "booking";
+
+/** Check a code before anything is created, for a clear message. Returns its hash. */
+export async function precheckVoucher(repo: Repository, code: string, today: string): Promise<string | null> {
+  if (!code) return null;
+  if (!looksLikeCode(code)) throw new OrderError(VOUCHER_PROBLEM_TEXT.not_found);
+  const hash = hashCode(code);
+  const problem = voucherProblem(await repo.getVoucherByCodeHash(hash), today);
+  if (problem) throw new OrderError(VOUCHER_PROBLEM_TEXT[problem]);
+  return hash;
+}
+
+/** Give back what a box order, corporate order or booking used, as credit. */
+export async function giveBackVoucherFor(
+  deps: LightDeps,
+  kind: VoucherTarget,
+  targetId: string,
+  who: { email: string; name: string; reference: string },
+): Promise<number> {
+  const today = todayInBusinessTz(nowOf(deps));
+  const back = await deps.repo.returnVoucherFor(kind, targetId, today);
+  if (back.amount > 0 && !back.toVoucher) {
+    await issueCredit(deps, {
+      email: who.email,
+      name: who.name,
+      amountCents: back.amount,
+      reason: `the voucher you used on ${who.reference} had expired, so here is the amount back as new credit.`,
+      sourceOrderId: null,
+    });
+  }
+  return back.amount;
+}

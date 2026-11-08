@@ -6,6 +6,8 @@ import { getRepo } from "@/lib/data";
 import { sessionLabel } from "@/lib/domain/classes";
 import { formatAud } from "@/lib/domain/money";
 import { bookingFromToken } from "@/lib/orders-public";
+import { selfCancelPreview } from "@/lib/services/classes";
+import { CancelBooking } from "./CancelBooking";
 
 export const metadata: Metadata = { title: "Your class ticket", robots: { index: false, follow: false }, referrer: "no-referrer" };
 
@@ -19,6 +21,7 @@ export default async function TicketPage({ params, searchParams }: PageProps<"/t
   const session = await repo.getSession(booking.sessionId);
   const type = session && (await repo.listClassTypes()).find((t) => t.id === session.classTypeId);
   if (!session || !type) notFound();
+  const preview = await selfCancelPreview(repo, booking);
   return (
     <>
       <SiteHeader />
@@ -46,12 +49,15 @@ export default async function TicketPage({ params, searchParams }: PageProps<"/t
             <p className="mt-3">
               Paid {formatAud(booking.amountPaidCents)}
               {booking.discountCents > 0 && ` (including a ${formatAud(booking.discountCents)} group discount)`}
+              {(booking.passCredits ?? 0) > 0 && `, plus ${booking.passCredits} class pass credit${booking.passCredits === 1 ? "" : "s"}`}
+              {(booking.voucherAppliedCents ?? 0) > 0 && `, plus ${formatAud(booking.voucherAppliedCents!)} by voucher`}
             </p>
             {booking.status === "paid" && (
               <a href={`/api/classes/ics/${token}`} className="btn btn-ghost mt-4" data-testid="add-to-calendar">
                 Add to calendar
               </a>
             )}
+            {preview?.canCancel && <CancelBooking token={token} summary={preview.outcome.summary} />}
           </div>
         </article>
       </main>

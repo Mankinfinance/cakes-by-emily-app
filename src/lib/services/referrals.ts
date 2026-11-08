@@ -58,6 +58,7 @@ export async function rewardReferral(deps: LightDeps, order: Order): Promise<boo
 export async function stampCardFor(repo: Repository, settings: Settings, email: string): Promise<StampCard> {
   const orders = await repo.listOrdersByEmail(email);
   const collected = orders.filter((o) => o.stage === "collected").length;
-  const used = orders.filter((o) => o.stampReward && o.stage !== "cancelled").length;
+  // Rewards used are counted from the claims table, keyed by email address.
+  const used = await repo.countStampRewards(email);
   return stampCard(collected, used, settings.stampEvery);
 }

@@ -23,10 +23,17 @@ export interface Deps {
   now?: Date;
 }
 
-export type LightDeps = Omit<Deps, "payments">;
+/** Deps without checkout. `payments` is only used for refunds, when available. */
+export type LightDeps = Omit<Deps, "payments"> & { payments?: PaymentsGateway | null };
 
 export const orderLink = (baseUrl: string, orderId: string) => `${baseUrl}/o/${orderToken(orderId)}`;
 export const boxLink = (baseUrl: string, boxOrderId: string) => `${baseUrl}/b/${boxToken(boxOrderId)}`;
+export const shareLink = (baseUrl: string, requestId: string) => `${baseUrl}/g/${linkToken("share", requestId)}`;
+export const guestLink = (baseUrl: string, requestId: string, guestId: string) =>
+  `${baseUrl}/g/${linkToken("share", requestId)}/${guestId}/${linkToken("guest", guestId)}`;
+/** The organiser's private class page (deposit, then the guest tracker). */
+export const organiserLink = (baseUrl: string, requestId: string) => `${baseUrl}/p/${linkToken("organiser", requestId)}`;
+export const galleryLink = (baseUrl: string, sessionId: string) => `${baseUrl}/gallery/${sessionId}/${linkToken("gallery", sessionId)}`;
 export const reviewLink = (baseUrl: string, orderId: string) => `${baseUrl}/review/${orderId}/${linkToken("review", orderId)}`;
 export const corporateLink = (baseUrl: string, id: string) => `${baseUrl}/c/${linkToken("corporate", id)}`;
 export const ticketLink = (baseUrl: string, id: string) => `${baseUrl}/t/${linkToken("booking", id)}`;

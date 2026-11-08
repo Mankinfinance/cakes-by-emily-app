@@ -19,7 +19,7 @@ export function orderToken(orderId: string): string {
 }
 
 /** Private links for other things customers own (phase 3). */
-export function linkToken(purpose: "review" | "corporate" | "booking", id: string): string {
+export function linkToken(purpose: "review" | "corporate" | "booking" | "share" | "guest" | "gallery" | "organiser", id: string): string {
   return createHmac("sha256", secret()).update(`${purpose}:${id}`).digest("base64url");
 }
 
@@ -34,6 +34,12 @@ export function boxToken(boxOrderId: string): string {
  */
 export function voucherCode(voucherId: string): string {
   const mac = createHmac("sha256", secret()).update(`voucher:${voucherId}`).digest();
+  return formatCode(new Uint8Array(mac.subarray(0, 10)));
+}
+
+/** A class pass code, derived the same way as voucher codes but with its own purpose. */
+export function passCode(passId: string): string {
+  const mac = createHmac("sha256", secret()).update(`pass:${passId}`).digest();
   return formatCode(new Uint8Array(mac.subarray(0, 10)));
 }
 

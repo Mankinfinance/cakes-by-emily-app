@@ -3,7 +3,19 @@
 import { useState, useTransition } from "react";
 import { advanceStageAction, cancelOrderAction } from "../../actions";
 
-export function OrderActions({ orderId, nextLabel, canCancel }: { orderId: string; nextLabel: string | null; canCancel: boolean }) {
+export function OrderActions({
+  orderId,
+  nextLabel,
+  canCancel,
+  cancelLabel = "Cancel order",
+  cancelConfirm = "Cancel this order? Because you're cancelling, everything paid should be refunded, and any voucher or credit used comes back as credit. The date is offered to the waitlist.",
+}: {
+  orderId: string;
+  nextLabel: string | null;
+  canCancel: boolean;
+  cancelLabel?: string;
+  cancelConfirm?: string;
+}) {
   const [pending, start] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -32,14 +44,14 @@ export function OrderActions({ orderId, nextLabel, canCancel }: { orderId: strin
           disabled={pending}
           data-testid="admin-cancel"
           onClick={() => {
-            if (!confirm("Cancel this order? Because you're cancelling, everything paid should be refunded (in Stripe), and any voucher or credit used comes back as credit. The date is offered to the waitlist.")) return;
+            if (!confirm(cancelConfirm)) return;
             start(async () => {
               const r = await cancelOrderAction(orderId);
               setError(r.ok ? null : r.error);
             });
           }}
         >
-          Cancel order
+          {cancelLabel}
         </button>
       )}
       {error && (

@@ -8,7 +8,11 @@ import { percentOfRoundedDollar } from "../domain/money";
 import type { CorporateOrder } from "../domain/types";
 import { checkUpload, MAX_PHOTO_BYTES, type CorporateRequest } from "../validation";
 import { calendarContext } from "./calendar";
-import { corporateLink, nowOf, OrderError, type Deps } from "./common";
+import { todayInBusinessTz } from "../domain/dates";
+import { adminEmail, corporateLink, nowOf, OrderError, type Deps, type LightDeps } from "./common";
+import { corporateAlertEmail, corporateConfirmationEmail, sendSafely } from "./email";
+import { refundTarget } from "./refunds";
+import { giveBackVoucherFor, precheckVoucher } from "./vouchers";
 import { hashToken, linkToken, newReference } from "./tokens";
 
 /** SVG logos can carry scripts, so only plain images are accepted. */
@@ -23,6 +27,8 @@ export async function createCorporateOrder(deps: Deps, req: CorporateRequest, lo
   const booking = checkBooking(req.pickupDate, req.pickupSlot, ctx);
   if (!booking.ok) throw new OrderError(booking.reason, 409);
   if (booking.status.isRush) throw new OrderError("Corporate orders need the standard notice. Please choose a later date.");
+  const today = todayInBusinessTz(now);
+  const voucherHash = await precheckVoucher(repo, req.voucherCode, today);
 
   const id = randomUUID();
   let logoPath: string | null = null;
@@ -55,22 +61,54 @@ export async function createCorporateOrder(deps: Deps, req: CorporateRequest, lo
     termsAcceptedAt: now.toISOString(),
   });
   const link = corporateLink(deps.baseUrl, id);
+  // A voucher comes off the deposit first, then the balance.
+  let applied = 0;
+  if (voucherHash) {
+    applied = await repo.redeemVoucherFor("corporate", voucherHash, id, pkg.priceCents, today);
+    if (applied === 0) {
+      await repo.setCorporateStatus(id, "cancelled", ["awaiting_payment"]);
+      throw new OrderError("Sorry, that voucher code could not be used. Please check it and try again.");
+    }
+  }
+  const payNow = Math.max(0, deposit - applied);
+  if (payNow === 0) {
+    await repo.setCorporateStatus(id, "confirmed", ["awaiting_payment"]);
+    const confirmed = (await repo.getCorporateOrderById(id))!;
+    await sendSafely(deps.mailer, corporateConfirmationEmail(confirmed, link));
+    const to = adminEmail();
+    if (to) await sendSafely(deps.mailer, corporateAlertEmail(confirmed, to));
+    return { order: confirmed, checkoutUrl: `${link}?paid=1` };
+  }
   const checkout = await deps.payments.createCheckout({
     targetId: id,
     reference: order.reference,
     kind: "corporate_deposit",
-    amountCents: deposit,
+    amountCents: payNow,
     description: `${BUSINESS.name}: ${pkg.name} for ${req.companyName} (deposit)`,
     customerEmail: req.email,
     successUrl: `${link}?paid=1`,
     cancelUrl: `${deps.baseUrl}/corporate?cancelled=1`,
   });
-  await repo.createPayment({ orderId: null, boxOrderId: null, voucherId: null, corporateOrderId: id, kind: "corporate_deposit", amountCents: deposit, stripeSessionId: checkout.id });
+  await repo.createPayment({ orderId: null, boxOrderId: null, voucherId: null, corporateOrderId: id, kind: "corporate_deposit", amountCents: payNow, stripeSessionId: checkout.id });
   return { order, checkoutUrl: checkout.url };
 }
 
+export function corporateOwing(o: Pick<CorporateOrder, "totalCents" | "amountPaidCents" | "voucherAppliedCents">): number {
+  return Math.max(0, o.totalCents - o.amountPaidCents - (o.voucherAppliedCents ?? 0));
+}
+
+/** Emily cancels a corporate order: voucher back, the cash refunded (automatically when switched on). */
+export async function cancelCorporate(deps: LightDeps, id: string): Promise<{ refundCents: number; autoRefundedCents: number }> {
+  const c = await deps.repo.getCorporateOrderById(id);
+  if (!c) throw new OrderError("Order not found.", 404);
+  if (!(await deps.repo.setCorporateStatus(c.id, "cancelled", ["awaiting_payment", "confirmed", "ready"]))) throw new OrderError("That change isn't possible for this order now.");
+  await giveBackVoucherFor(deps, "corporate", c.id, { email: c.email, name: c.contactName, reference: c.reference });
+  const refund = await refundTarget(deps, "corporate", c.id, c.amountPaidCents, "cancel-emily", `corporate order ${c.reference}`);
+  return { refundCents: c.amountPaidCents, autoRefundedCents: refund.refundedCents };
+}
+
 export async function startCorporateBalance(deps: Deps, order: CorporateOrder): Promise<string> {
-  const owing = Math.max(0, order.totalCents - order.amountPaidCents);
+  const owing = corporateOwing(order);
   if (order.status === "awaiting_payment" || order.status === "cancelled") throw new OrderError("This order cannot take a payment right now.");
   if (owing <= 0) throw new OrderError("This order is already paid in full.");
   const link = corporateLink(deps.baseUrl, order.id);
