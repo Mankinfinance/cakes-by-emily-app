@@ -8,6 +8,7 @@ import { formatAud } from "@/lib/domain/money";
 import { bookingFromToken } from "@/lib/orders-public";
 import { selfCancelPreview } from "@/lib/services/classes";
 import { CancelBooking } from "./CancelBooking";
+import { CancelSeats } from "./CancelSeats";
 
 export const metadata: Metadata = { title: "Your class ticket", robots: { index: false, follow: false }, referrer: "no-referrer" };
 
@@ -57,7 +58,15 @@ export default async function TicketPage({ params, searchParams }: PageProps<"/t
                 Add to calendar
               </a>
             )}
+            {(booking.partialCancellations ?? []).length > 0 && (
+              <ul className="mt-3 grid gap-1 text-xs text-muted" data-testid="partial-history">
+                {booking.partialCancellations!.map((p, i) => (
+                  <li key={i}>{p.summary}</li>
+                ))}
+              </ul>
+            )}
             {preview?.canCancel && <CancelBooking token={token} summary={preview.outcome.summary} />}
+            {preview?.canCancel && booking.seats > 1 && <CancelSeats token={token} guests={booking.guests.map((g) => g.name)} />}
           </div>
         </article>
       </main>

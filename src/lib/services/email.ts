@@ -14,6 +14,8 @@ import type {
   ClassPass,
   ClassSession,
   ClassType,
+  PartialCancellation,
+  PrivateGuest,
   CorporateOrder,
   Order,
   PrivateRequest,
@@ -731,5 +733,77 @@ export function bookingCancelledByCustomerAlert(b: ClassBooking, t: ClassType, s
       (r.autoRefundedCents ?? 0) > 0 ? `${formatAud(r.autoRefundedCents!)} was refunded through Stripe automatically.` : "",
       manual > 0 ? `ACTION: refund ${formatAud(manual)} in the Stripe dashboard.` : "",
     ].filter(Boolean)),
+  };
+}
+
+// Phase 5 templates ------------------------------------------------------
+
+export function guestAllergyChangedEmail(r: PrivateRequest, g: Pick<PrivateGuest, "name" | "allergies" | "dietary">, before: Pick<PrivateGuest, "allergies" | "dietary">, to: string): Email {
+  const show = (d: Pick<PrivateGuest, "allergies" | "dietary">) => [d.allergies.trim(), d.dietary.join(", ")].filter(Boolean).join("; ") || "none";
+  return {
+    to,
+    subject: `Allergy change: ${g.name || "a guest"} (${r.reference})`,
+    ...render([
+      `${g.name || "A guest"} changed their allergy or dietary details for ${r.contactName.split(" ")[0]}'s private ${r.packageName} class on ${formatDateLong(r.preferredDate)}.`,
+      `Before: ${show(before)}`,
+      `Now: ${show(g)}`,
+      "Check the class prep and the guest list in the admin area.",
+    ]),
+  };
+}
+
+export function seatsCancelledEmail(b: ClassBooking, t: ClassType, s: ClassSession, p: PartialCancellation, ticket: string): Email {
+  return {
+    to: b.email,
+    subject: `Seats cancelled: ${t.name}, ${formatDateLong(s.date)}`,
+    ...render(
+      [
+        `Hi ${b.contactName.split(" ")[0]}, ${p.seats === 1 ? "1 seat has" : `${p.seats} seats have`} been cancelled from your booking for ${t.name} on ${sessionWhen(s)} (${p.guestNames.join(", ")}).`,
+        p.summary,
+        p.refundCents > 0 ? `Your refund of ${formatAud(p.refundCents)} will be made to your card within a few business days.` : "",
+        "Your updated ticket:",
+      ].filter(Boolean),
+      { label: "View your ticket", href: ticket },
+    ),
+  };
+}
+
+export function seatsCancelledAlertEmail(b: ClassBooking, t: ClassType, s: ClassSession, p: PartialCancellation, to: string): Email {
+  const manual = p.refundCents - (p.autoRefundedCents ?? 0);
+  return {
+    to,
+    subject: `Seats cancelled: ${b.reference}${manual > 0 ? ` (refund ${formatAud(manual)} in Stripe)` : ""}`,
+    ...render(
+      [
+        `${b.contactName} cancelled ${p.seats === 1 ? "1 seat" : `${p.seats} seats`} (${p.guestNames.join(", ")}) for ${t.name} on ${sessionWhen(s)}. The seats have been offered to the waitlist.`,
+        p.summary,
+        (p.autoRefundedCents ?? 0) > 0 ? `${formatAud(p.autoRefundedCents!)} was refunded through Stripe automatically.` : "",
+        manual > 0 ? `ACTION: refund ${formatAud(manual)} in the Stripe dashboard.` : "",
+      ].filter(Boolean),
+    ),
+  };
+}
+
+export function lateRefundEmail(reference: string, amountCents: number, refundedCents: number, to: string): Email {
+  return {
+    to,
+    subject: `Late payment refunded: ${reference}`,
+    ...render([
+      `A payment of ${formatAud(amountCents)} arrived for ${reference} after it had expired and been cancelled.`,
+      refundedCents >= amountCents
+        ? `It was refunded in full through Stripe automatically. Nothing to do, unless you'd like to contact the customer to re-book.`
+        : `${formatAud(refundedCents)} was refunded automatically. ACTION: refund the remaining ${formatAud(amountCents - refundedCents)} in the Stripe dashboard.`,
+    ]),
+  };
+}
+
+export function setupTestEmail(to: string, siteHost: string): Email {
+  return {
+    to,
+    subject: `Test email from ${BUSINESS.name}`,
+    ...render([
+      `This is a test email from the setup page at ${siteHost}.`,
+      "If you can read this, Resend is working and order emails will reach you.",
+    ]),
   };
 }

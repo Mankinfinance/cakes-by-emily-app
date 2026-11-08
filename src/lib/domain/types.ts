@@ -128,6 +128,9 @@ export interface Settings {
   passValidMonths: number;
   /** When on, refunds the terms allow are made through Stripe automatically. Off by default. */
   autoRefunds: boolean;
+  // Phase 5
+  /** Private class guests can change their own details up to this many days before the class. */
+  guestEditCutoffDays: number;
 }
 
 export interface PrivatePackage {
@@ -576,6 +579,24 @@ export interface ClassBooking {
   passCredits?: number;
   voucherId?: string | null;
   voucherAppliedCents?: number;
+  /** Phase 5: seats cancelled from this booking (the booking itself stays live). */
+  partialCancellations?: PartialCancellation[];
+}
+
+/** Some seats of a class booking were cancelled. */
+export interface PartialCancellation {
+  at: string;
+  daysOut: number;
+  seats: number;
+  guestNames: string[];
+  refundCents: number;
+  creditCents: number;
+  /** Voucher or credit that paid for the cancelled seats, given back as a credit code. */
+  voucherCreditCents: number;
+  passCreditsReturned: number;
+  autoRefundedCents?: number;
+  refundIds?: string[];
+  summary: string;
 }
 
 export type PrivateRequestStatus = "requested" | "accepted" | "declined" | "paid" | "cancelled";
@@ -622,6 +643,11 @@ export interface PrivateGuest {
   holdUntil: string | null;
   paidAt: string | null;
   detailsAt: string | null;
+  /** Phase 5: a gift voucher, credit code or class pass credit applied to this guest's share. */
+  voucherId?: string | null;
+  voucherAppliedCents?: number;
+  passId?: string | null;
+  passAppliedCents?: number;
 }
 
 export interface ClassPhoto {

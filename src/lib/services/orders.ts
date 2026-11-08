@@ -14,6 +14,7 @@ import { looksLikeCode, VOUCHER_PROBLEM_TEXT, voucherProblem } from "../domain/v
 import type { OrderRequest } from "../validation";
 import { checkUpload, IMAGE_TYPES, magicMatches, MAX_PHOTO_BYTES, MAX_VIDEO_BYTES, VIDEO_TYPES } from "../validation";
 import { calendarContext } from "./calendar";
+import { handleLatePayment } from "./late-payments";
 import { adminEmail, adminLink, boxLink, corporateLink, nowOf, OrderError, orderLink, type Deps, type LightDeps } from "./common";
 import {
   balanceReceiptEmail,
@@ -21,7 +22,6 @@ import {
   corporateConfirmationEmail,
   boxAlertEmail,
   boxConfirmationEmail,
-  latePaymentAlertEmail,
   newOrderAlertEmail,
   photoUpdateEmail,
   sendSafely,
@@ -240,7 +240,10 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
   const payment = await repo.getPaymentBySession(sessionId);
   if (!payment) return false;
   // Remember the PaymentIntent so refunds can be made against it later.
-  if (paymentIntent) await repo.setPaymentIntent(sessionId, paymentIntent);
+  if (paymentIntent) {
+    await repo.setPaymentIntent(sessionId, paymentIntent);
+    payment.stripePaymentIntent ??= paymentIntent;
+  }
   const first = await repo.recordPaymentOnce(eventId, sessionId);
   if (!first) return false;
   const alertTo = adminEmail();
@@ -249,7 +252,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const order = await repo.getOrderById(payment.orderId);
     if (!order) return true;
     if (order.stage === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(order.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, order.reference, paymentIntent);
       return true;
     }
     if (payment.kind === "deposit") await onDepositSettled(deps, order);
@@ -258,7 +261,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const bo = await repo.getBoxOrderById(payment.boxOrderId);
     if (!bo) return true;
     if (bo.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(bo.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, bo.reference, paymentIntent);
       return true;
     }
     await sendSafely(mailer, boxConfirmationEmail(bo, boxLink(deps.baseUrl, bo.id)));
@@ -270,7 +273,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const c = await repo.getCorporateOrderById(payment.corporateOrderId);
     if (!c) return true;
     if (c.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(c.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, c.reference, paymentIntent);
       return true;
     }
     await sendSafely(mailer, corporateConfirmationEmail(c, corporateLink(deps.baseUrl, c.id)));
@@ -279,7 +282,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const b = await repo.getBookingById(payment.classBookingId);
     if (!b) return true;
     if (b.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(b.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, b.reference, paymentIntent);
       return true;
     }
     await onClassPaid(deps, b);
@@ -287,7 +290,7 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
     const r = await repo.getPrivateRequest(payment.privateRequestId);
     if (!r) return true;
     if (r.status === "cancelled") {
-      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(r.reference, payment.amountCents, alertTo));
+      await handleLatePayment(deps, payment, r.reference, paymentIntent);
       return true;
     }
     if (payment.kind === "private_share") await onSharePaid(deps, r, payment);

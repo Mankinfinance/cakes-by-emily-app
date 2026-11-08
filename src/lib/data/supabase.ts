@@ -345,6 +345,7 @@ function toBooking(r: Row): ClassBooking {
     passCredits: (r.pass_credits as number) ?? 0,
     voucherId: (r.voucher_id as string | null) ?? null,
     voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
+    partialCancellations: (r.partial_cancellations as ClassBooking["partialCancellations"]) ?? [],
   };
 }
 
@@ -391,6 +392,10 @@ function toGuest(r: Row): PrivateGuest {
     holdUntil: (r.hold_until as string | null) ?? null,
     paidAt: (r.paid_at as string | null) ?? null,
     detailsAt: (r.details_at as string | null) ?? null,
+    voucherId: (r.voucher_id as string | null) ?? null,
+    voucherAppliedCents: (r.voucher_applied_cents as number) ?? 0,
+    passId: (r.pass_id as string | null) ?? null,
+    passAppliedCents: (r.pass_applied_cents as number) ?? 0,
   };
 }
 
@@ -1423,6 +1428,32 @@ export const supabaseRepository: Repository = {
     const { count, error } = await db().from("stamp_rewards").select("*", { count: "exact", head: true }).eq("email", email.toLowerCase());
     if (error) throw new Error(`Database error: ${error.message}`);
     return count ?? 0;
+  },
+
+  async redeemPassShare(codeHash, guestId, valueCents, today) {
+    return check(await db().rpc("redeem_pass_share", { p_code_hash: codeHash, p_guest: guestId, p_value_cents: valueCents, p_today: today })) as number;
+  },
+  async returnPassShare(guestId, today) {
+    return check(await db().rpc("return_pass_share", { p_guest: guestId, p_today: today })) as number;
+  },
+  async markSharePaidFree(guestId) {
+    return check(await db().rpc("mark_share_paid_free", { p_guest: guestId })) as boolean;
+  },
+  async partialCancelBooking(w) {
+    return check(
+      await db().rpc("partial_cancel_booking", {
+        p_booking: w.bookingId,
+        p_expected_seats: w.expectedSeats,
+        p_new_guests: w.guests,
+        p_new_discount: w.discountCents,
+        p_new_total: w.totalCents,
+        p_cash_out: w.cashOutCents,
+        p_voucher_out: w.voucherOutCents,
+        p_pass_back: w.passCreditsBack,
+        p_today: w.today,
+        p_record: w.record,
+      }),
+    ) as boolean;
   },
 };
 

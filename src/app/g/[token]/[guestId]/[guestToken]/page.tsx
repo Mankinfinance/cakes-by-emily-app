@@ -6,8 +6,11 @@ import { getRepo } from "@/lib/data";
 import { formatDateLong, formatTime12 } from "@/lib/domain/dates";
 import { formatAud } from "@/lib/domain/money";
 import { shareDueDate } from "@/lib/domain/split";
-import { guestFromTokens } from "@/lib/services/split";
+import { shareOwed } from "@/lib/domain/guests";
+import { guestEditWindow, guestFromTokens } from "@/lib/services/split";
+import { GuestEditForm } from "./GuestEditForm";
 import { PayShareButton } from "./PayShareButton";
+import { ShareCodeForm } from "./ShareCodeForm";
 
 export const metadata: Metadata = { title: "Your share", robots: { index: false, follow: false }, referrer: "no-referrer" };
 
@@ -20,6 +23,10 @@ export default async function GuestPage({ params, searchParams }: PageProps<"/g/
   if (!found) notFound();
   const { request: r, guest: g } = found;
   const settings = await repo.getSettings();
+  const edit = await guestEditWindow({ repo }, r);
+  const owed = shareOwed(g);
+  const codeCents = (g.voucherAppliedCents ?? 0) + (g.passAppliedCents ?? 0);
+  const tokens = { shareToken: token, guestId, guestToken };
   return (
     <>
       <SiteHeader />
@@ -31,18 +38,29 @@ export default async function GuestPage({ params, searchParams }: PageProps<"/g/
         </p>
         <section className="card mt-6 p-5 text-sm">
           <p>Your details are saved. Keep this page&apos;s link to come back to it.</p>
+          {edit.canEdit ? (
+            <GuestEditForm tokens={tokens} initial={{ name: g.name, email: g.email, allergies: g.allergies, dietary: g.dietary, messageOptIn: g.messageOptIn }} deadline={formatDateLong(edit.deadline)} />
+          ) : (
+            <p className="mt-2 text-xs text-muted" data-testid="guest-edit-closed">Details can no longer be changed online. Please message Emily with any changes, especially allergies.</p>
+          )}
           {g.status === "paid" ? (
             <p className="mt-3 text-lg font-semibold" data-testid="share-paid">
-              Your share of {formatAud(g.shareCents)} is paid. See you there!
+              Your share of {formatAud(g.shareCents)} is paid{codeCents > 0 ? ` (${formatAud(codeCents)} by ${g.passId ? "class pass" : "voucher or credit"})` : ""}. See you there!
             </p>
           ) : (
             <>
               <p className="mt-3">
                 Your share is <strong>{formatAud(g.shareCents)}</strong>, due by {formatDateLong(shareDueDate(r, settings.splitDueDays))}.
               </p>
+              {codeCents > 0 && (
+                <p className="mt-1" data-testid="share-code-applied">
+                  {g.passId ? "Class pass credit" : "Voucher or credit"} applied: {formatAud(codeCents)}. Left to pay: <strong data-testid="share-owed">{formatAud(owed)}</strong>.
+                </p>
+              )}
               <div className="mt-4">
-                <PayShareButton shareToken={token} guestId={guestId} guestToken={guestToken} amount={formatAud(g.shareCents)} />
+                <PayShareButton shareToken={token} guestId={guestId} guestToken={guestToken} amount={formatAud(owed)} />
               </div>
+              {!g.voucherId && !g.passId && <ShareCodeForm tokens={tokens} />}
             </>
           )}
         </section>

@@ -6,13 +6,17 @@
 import { randomUUID } from "node:crypto";
 import { BUSINESS } from "../config";
 import { todayInBusinessTz } from "../domain/dates";
+import { allergyChanged, guestCanEdit, guestEditDeadline, passCreditValue, shareCodeProblem, shareOwed } from "../domain/guests";
 import { canNudge, holdable, NUDGE_COOLDOWN_HOURS, organiserCanPayRest, shareAmounts, shareDueDate, splitProgress } from "../domain/split";
+import { looksLikeCode } from "../domain/vouchers";
 import type { Payment, PrivateGuest, PrivateRequest } from "../domain/types";
 import { PAYMENT_HOLD_MINUTES } from "../data/repository";
 import type { GuestDetails } from "../validation";
 import { adminEmail, guestLink, nowOf, OrderError, organiserLink, shareLink, type Deps, type LightDeps } from "./common";
-import { latePaymentAlertEmail, sendSafely, shareNudgeEmail, sharePaidEmail, shareProgressEmail, sharesReadyEmail } from "./email";
-import { hashToken, linkToken, looksLikeToken, safeEqual } from "./tokens";
+import { guestAllergyChangedEmail, sendSafely, shareNudgeEmail, sharePaidEmail, shareProgressEmail, sharesReadyEmail } from "./email";
+import { handleLatePayment } from "./late-payments";
+import { giveBackVoucherFor } from "./vouchers";
+import { hashCode, hashToken, linkToken, looksLikeToken, safeEqual } from "./tokens";
 
 /** Deposit paid: create the guest places and email the organiser their share link. */
 export async function setUpShares(deps: LightDeps, r: PrivateRequest): Promise<void> {
@@ -41,7 +45,9 @@ export async function guestFromTokens(deps: Pick<LightDeps, "repo">, shareToken:
   return guest && guest.requestId === request.id ? { request, guest } : null;
 }
 
-async function holdAndCheckout(deps: Deps, r: PrivateRequest, guests: PrivateGuest[], email: string, successUrl: string, cancelUrl: string): Promise<string> {
+async function holdAndCheckout(deps: Deps, r: PrivateRequest, all: PrivateGuest[], email: string, successUrl: string, cancelUrl: string): Promise<string> {
+  // A share fully covered by a voucher or pass credit needs no payment.
+  const guests = all.filter((g) => shareOwed(g) > 0);
   if (guests.length === 0) throw new OrderError("There's nothing left to pay.");
   const key = randomUUID();
   // Holds run on the real clock (like the database's now()), matching the checkout's own expiry.
@@ -49,7 +55,7 @@ async function holdAndCheckout(deps: Deps, r: PrivateRequest, guests: PrivateGue
   if (!(await deps.repo.holdShares(guests.map((g) => g.id), key, until))) {
     throw new OrderError("Someone is paying for this share right now, or it's already paid. Please try again in a few minutes.", 409);
   }
-  const amount = guests.reduce((s, g) => s + g.shareCents, 0);
+  const amount = guests.reduce((s, g) => s + shareOwed(g), 0);
   const checkout = await deps.payments.createCheckout({
     targetId: r.id,
     reference: r.reference,
@@ -130,11 +136,84 @@ export async function onSharePaid(deps: LightDeps, request: PrivateRequest, paym
   const paidNow = guests.filter((g) => g.holdKey === payment.shareHoldKey && g.status === "paid");
   if (paidNow.length === 0) {
     // The hold had run out and someone else's payment took the share: refund this one.
-    const to = adminEmail();
-    if (to) await sendSafely(deps.mailer, latePaymentAlertEmail(request.reference, payment.amountCents, to));
+    await handleLatePayment(deps, payment, request.reference);
     return;
   }
   for (const g of paidNow) if (g.email) await sendSafely(deps.mailer, sharePaidEmail(request, g.name, g.email, g.shareCents));
   const progress = splitProgress(guests);
   await sendSafely(deps.mailer, shareProgressEmail(request, progress.paid, progress.guests, organiserLink(deps.baseUrl, request.id)));
+}
+
+// Phase 5 -------------------------------------------------------------------
+
+export type GuestEdit = Pick<PrivateGuest, "name" | "email" | "allergies" | "dietary" | "messageOptIn">;
+
+/** Can this guest still change their details? (For the page, and checked again on save.) */
+export async function guestEditWindow(deps: Pick<LightDeps, "repo" | "now">, request: PrivateRequest): Promise<{ canEdit: boolean; deadline: string }> {
+  const settings = await deps.repo.getSettings();
+  const today = todayInBusinessTz(nowOf(deps));
+  return {
+    canEdit: request.status === "paid" && guestCanEdit(request.preferredDate, today, settings.guestEditCutoffDays),
+    deadline: guestEditDeadline(request.preferredDate, settings.guestEditCutoffDays),
+  };
+}
+
+/** A guest changes their own details from their link, up to the cut-off. Emily hears about allergy changes. */
+export async function editGuestDetails(deps: LightDeps, request: PrivateRequest, guest: PrivateGuest, d: GuestEdit): Promise<{ allergyChanged: boolean }> {
+  const window = await guestEditWindow(deps, request);
+  if (!window.canEdit) throw new OrderError("Details can't be changed online this close to the class. Please message Emily with any changes, especially allergies.");
+  await deps.repo.updateGuestDetails(guest.id, d);
+  const changed = allergyChanged(guest, d);
+  const to = adminEmail();
+  if (changed && to) await sendSafely(deps.mailer, guestAllergyChangedEmail(request, d, guest, to));
+  return { allergyChanged: changed };
+}
+
+/**
+ * A guest uses a gift voucher, credit code or class pass on their own share.
+ * One code per share, taken atomically. If it covers the whole share, the
+ * share is paid with no checkout.
+ */
+export async function applyCodeToShare(deps: LightDeps, request: PrivateRequest, guest: PrivateGuest, code: string): Promise<{ appliedCents: number; kind: "voucher" | "pass"; owedCents: number; paid: boolean }> {
+  const now = nowOf(deps);
+  openForShares(request, todayInBusinessTz(now));
+  const problem = shareCodeProblem(guest, new Date().toISOString());
+  if (problem) throw new OrderError(problem, 409);
+  const bad = "That code wasn't recognised, or has nothing left on it. Please check it and try again.";
+  if (!looksLikeCode(code)) throw new OrderError(bad);
+  const today = todayInBusinessTz(now);
+  const hash = hashCode(code);
+  const voucher = await deps.repo.getVoucherByCodeHash(hash);
+  let applied = 0;
+  let kind: "voucher" | "pass" = "voucher";
+  if (voucher) {
+    applied = await deps.repo.redeemVoucherFor("share", hash, guest.id, shareOwed(guest), today);
+  } else if (await deps.repo.getPassByCodeHash(hash)) {
+    kind = "pass";
+    const settings = await deps.repo.getSettings();
+    applied = await deps.repo.redeemPassShare(hash, guest.id, passCreditValue(settings.passPriceCents, settings.passCredits), today);
+  }
+  if (applied === 0) throw new OrderError(bad);
+  const updated = (await deps.repo.getGuest(guest.id))!;
+  const owed = shareOwed(updated);
+  let paid = false;
+  if (owed === 0 && (await deps.repo.markSharePaidFree(guest.id))) {
+    paid = true;
+    if (updated.email) await sendSafely(deps.mailer, sharePaidEmail(request, updated.name, updated.email, updated.shareCents));
+    const progress = splitProgress(await deps.repo.listGuests(request.id));
+    await sendSafely(deps.mailer, shareProgressEmail(request, progress.paid, progress.guests, organiserLink(deps.baseUrl, request.id)));
+  }
+  return { appliedCents: applied, kind, owedCents: owed, paid };
+}
+
+/** When a private class is cancelled, each guest's voucher or pass credit comes back. */
+export async function returnShareCodes(deps: LightDeps, request: PrivateRequest): Promise<{ voucherCents: number; passCredits: number }> {
+  const today = todayInBusinessTz(nowOf(deps));
+  let voucherCents = 0;
+  let passCredits = 0;
+  for (const g of await deps.repo.listGuests(request.id)) {
+    if (g.voucherId) voucherCents += await giveBackVoucherFor(deps, "share", g.id, { email: g.email || request.email, name: g.name || request.contactName, reference: request.reference });
+    if (g.passId) passCredits += await deps.repo.returnPassShare(g.id, today);
+  }
+  return { voucherCents, passCredits };
 }

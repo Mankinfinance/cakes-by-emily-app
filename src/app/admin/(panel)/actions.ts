@@ -523,3 +523,12 @@ export async function cancelPrivateAction(id: string): Promise<ActionResult> {
     return fail(err);
   }
 }
+
+// Phase 5 -------------------------------------------------------------------
+
+export async function sendSetupTestEmailAction(): Promise<ActionResult<{ to: string }>> {
+  await requireAdmin();
+  const { sendSetupTestEmail } = await import("@/lib/services/setup");
+  const r = await sendSetupTestEmail();
+  return "error" in r ? { ok: false, error: r.error } : { ok: true, data: { to: r.to } };
+}

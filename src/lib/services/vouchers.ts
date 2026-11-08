@@ -112,7 +112,7 @@ export async function checkCode(repo: Repository, code: string, today: string): 
 
 // Phase 4: vouchers on box orders, corporate orders and class bookings ----------
 
-export type VoucherTarget = "box" | "corporate" | "booking";
+export type VoucherTarget = import("../data/repository").VoucherTargetKind;
 
 /** Check a code before anything is created, for a clear message. Returns its hash. */
 export async function precheckVoucher(repo: Repository, code: string, today: string): Promise<string | null> {

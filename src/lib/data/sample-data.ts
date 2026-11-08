@@ -137,6 +137,7 @@ export const SAMPLE_SETTINGS: Settings = {
   passCredits: 3,
   passValidMonths: 12,
   autoRefunds: false,
+  guestEditCutoffDays: 2,
 };
 
 export const SAMPLE_AUTOMATIONS: Automation[] = [

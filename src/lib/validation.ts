@@ -109,6 +109,7 @@ export const settingsSchema = z
     passCredits: z.number().int().min(1).max(20),
     passValidMonths: z.number().int().min(1).max(60),
     autoRefunds: z.boolean(),
+    guestEditCutoffDays: z.number().int().min(0).max(60),
   })
   .refine((s) => s.classCreditDays <= s.classFullRefundDays, {
     message: "The class credit window must start on or before the full refund window",
@@ -361,6 +362,9 @@ export const guestDetailsSchema = z.object({
   pay: z.boolean().default(false),
 });
 export type GuestDetails = z.infer<typeof guestDetailsSchema>;
+
+/** Phase 5: a guest changing their own details later. */
+export const guestEditSchema = guestDetailsSchema.pick({ name: true, email: true, allergies: true, dietary: true, messageOptIn: true });
 
 export const passPurchaseSchema = z.object({
   buyerName: z.string().trim().min(2, "Please enter your name").max(80),

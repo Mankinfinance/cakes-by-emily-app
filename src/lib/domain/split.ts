@@ -3,6 +3,7 @@
 // the due date.
 
 import { addDays } from "./dates";
+import { shareOwed } from "./guests";
 import type { PrivateGuest, PrivateRequest } from "./types";
 
 /** Shares in cents, one per guest. Any remainder cents go on the first share. */
@@ -42,7 +43,7 @@ export function splitProgress(guests: PrivateGuest[]): SplitProgress {
     paid: paid.length,
     detailsIn: guests.filter((g) => g.name).length,
     paidCents: paid.reduce((s, g) => s + g.shareCents, 0),
-    owingCents: guests.filter((g) => g.status === "open").reduce((s, g) => s + g.shareCents, 0),
+    owingCents: guests.filter((g) => g.status === "open").reduce((s, g) => s + shareOwed(g), 0),
     paidNames: paid.map((g) => g.name || `Guest ${g.slot}`),
     waitingNames: guests.filter((g) => g.status === "open" && g.name).map((g) => g.name),
   };

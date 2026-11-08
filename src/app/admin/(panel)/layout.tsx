@@ -56,6 +56,9 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
             <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/settings">
               Settings
             </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/setup">
+              Setup
+            </Link>
             <form action="/admin/signout" method="post">
               <button className="rounded-full px-3 py-1.5 text-muted hover:bg-blush" title={admin.email}>
                 Sign out

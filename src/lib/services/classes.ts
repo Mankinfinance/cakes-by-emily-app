@@ -17,8 +17,9 @@ import {
   type ClassCancelOutcome,
 } from "../domain/classes";
 import { formatAud } from "../domain/money";
+import { partialCancelQuote } from "../domain/partial-cancel";
 import { addDays, daysBetween, todayInBusinessTz } from "../domain/dates";
-import type { CancellationRecord, ClassBooking, ClassSession, ClassType, PrivateRequest, WaitlistEntry } from "../domain/types";
+import type { CancellationRecord, ClassBooking, ClassSession, ClassType, PartialCancellation, PrivateRequest, WaitlistEntry } from "../domain/types";
 import { expiredOffers, isActiveOffer, nextInLine, OFFER_HOURS, placeInLine } from "../domain/waitlist";
 import { RELEASE_AFTER_MINUTES, type Repository } from "../data/repository";
 import type { ClassBookingRequest, ClassWaitlistRequest, PrivateRequestInput } from "../validation";
@@ -39,13 +40,15 @@ import {
   privateDeclinedEmail,
   privatePaidEmail,
   privateReceivedEmail,
+  seatsCancelledAlertEmail,
+  seatsCancelledEmail,
   sendSafely,
   type Email,
 } from "./email";
 import { pickupDetailsText } from "./messages";
 import { precheckPass } from "./passes";
 import { refundTarget } from "./refunds";
-import { setUpShares } from "./split";
+import { returnShareCodes, setUpShares } from "./split";
 import { giveBackVoucherFor, issueCredit, precheckVoucher } from "./vouchers";
 import { hashToken, linkToken, looksLikeToken, newReference, randomToken } from "./tokens";
 
@@ -538,10 +541,93 @@ export async function cancelPrivate(deps: LightDeps, id: string): Promise<Cancel
   };
   if (!(await deps.repo.cancelPrivateOnce(r.id, record))) throw new OrderError("This request is already closed.", 409);
   const refund = await refundTarget(deps, "private", r.id, paid, "cancel-emily", `private class ${r.reference}`);
-  record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+  // Phase 5: vouchers and pass credits guests used on their shares come back.
+  const codes = await returnShareCodes(deps, r);
+  record = {
+    ...record,
+    autoRefundedCents: refund.refundedCents,
+    refundIds: refund.refundIds,
+    voucherReturnedCents: codes.voucherCents,
+    passCreditsReturned: codes.passCredits,
+    summary:
+      record.summary +
+      (codes.voucherCents ? ` ${formatAud(codes.voucherCents)} of vouchers or credit used on shares comes back as credit.` : "") +
+      (codes.passCredits ? ` ${codes.passCredits === 1 ? "1 class pass credit comes" : `${codes.passCredits} class pass credits come`} back.` : ""),
+  };
   await sendSafely(deps.mailer, privateCancelledEmail(r, record.summary));
   for (const g of await deps.repo.listGuests(r.id)) {
     if (g.status === "paid" && g.email) await sendSafely(deps.mailer, privateCancelledEmail({ ...r, email: g.email, contactName: g.name || r.contactName }, record.summary));
   }
+  return record;
+}
+
+// Phase 5: cancelling some seats ---------------------------------------------
+
+/** What cancelling these guests' seats would do today (shown before confirming). */
+export async function partialCancelPreview(repo: Repository, booking: ClassBooking, guestIndexes: number[], now = new Date()) {
+  const settings = await repo.getSettings();
+  const session = await repo.getSession(booking.sessionId);
+  if (!session) return null;
+  const daysOut = daysBetween(todayInBusinessTz(now), session.date);
+  const quote = partialCancelQuote(booking, guestIndexes, settings, daysOut);
+  if (quote.ok && session.status !== "scheduled") return { daysOut, quote: { ...quote, ok: false, problem: "This class isn't running, so the whole booking is being refunded." } };
+  return { daysOut, quote };
+}
+
+/**
+ * The customer cancels some seats from their ticket page. The price is worked
+ * out again for the seats left (the group discount can drop away), and the
+ * difference is refunded or turned into credit under the class terms. Pass
+ * credits for cancelled seats go back; voucher money for them comes back as
+ * a new credit code. The freed seats are offered to the waitlist.
+ */
+export async function cancelSomeSeats(deps: LightDeps, bookingId: string, guestIndexes: number[]): Promise<PartialCancellation> {
+  const booking = await deps.repo.getBookingById(bookingId);
+  if (!booking) throw new OrderError("Booking not found.", 404);
+  const now = nowOf(deps);
+  const preview = await partialCancelPreview(deps.repo, booking, guestIndexes, now);
+  if (!preview) throw new OrderError("Booking not found.", 404);
+  const q = preview.quote;
+  if (!q.ok) throw new OrderError(q.problem ?? "Those seats can't be cancelled online.");
+  const { session, type } = await sessionAndType(deps.repo, booking.sessionId);
+  const drop = new Set(guestIndexes);
+  let record: PartialCancellation = {
+    at: now.toISOString(),
+    daysOut: preview.daysOut,
+    seats: q.seatsCancelled,
+    guestNames: q.guestNames,
+    refundCents: q.refundCents,
+    creditCents: q.creditCents,
+    voucherCreditCents: q.voucherCreditCents,
+    passCreditsReturned: q.passCreditsReturned,
+    summary: q.summary,
+  };
+  const ok = await deps.repo.partialCancelBooking({
+    bookingId: booking.id,
+    expectedSeats: booking.seats,
+    guests: booking.guests.filter((_, i) => !drop.has(i)),
+    discountCents: q.newDiscountCents,
+    totalCents: q.newTotalCents,
+    cashOutCents: q.refundCents + q.creditCents,
+    voucherOutCents: q.voucherCreditCents,
+    passCreditsBack: q.passCreditsReturned,
+    today: todayInBusinessTz(now),
+    record,
+  });
+  if (!ok) throw new OrderError("This booking changed just now. Please reload the page and try again.", 409);
+
+  const credit = q.creditCents + q.voucherCreditCents;
+  if (credit > 0) {
+    await issueCredit(deps, { email: booking.email, name: booking.contactName, amountCents: credit, reason: `here is the credit from the seats you cancelled on class booking ${booking.reference}.`, sourceOrderId: null });
+  }
+  if (q.refundCents > 0) {
+    const refund = await refundTarget(deps, "booking", booking.id, q.refundCents, `partial-${record.at}`, `class booking ${booking.reference} (${q.seatsCancelled} seats)`);
+    if (refund.refundedCents > 0) record = { ...record, autoRefundedCents: refund.refundedCents, refundIds: refund.refundIds };
+  }
+  const updated = (await deps.repo.getBookingById(booking.id))!;
+  await sendSafely(deps.mailer, seatsCancelledEmail(updated, type, session, record, ticketLink(deps.baseUrl, booking.id)));
+  const to = adminEmail();
+  if (to) await sendSafely(deps.mailer, seatsCancelledAlertEmail(updated, type, session, record, to));
+  await offerNextClass(deps, session.id);
   return record;
 }

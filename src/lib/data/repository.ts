@@ -23,6 +23,7 @@ import type {
   DayOff,
   Order,
   OrderUpdate,
+  PartialCancellation,
   Payment,
   PeakDate,
   SeasonalBox,
@@ -304,8 +305,8 @@ export interface Repository {
   markBoxPaidWithoutPayment(id: string): Promise<boolean>;
 
   // Vouchers on boxes, corporate orders and class bookings
-  redeemVoucherFor(kind: "box" | "corporate" | "booking", codeHash: string, targetId: string, maxCents: number, today: string): Promise<number>;
-  returnVoucherFor(kind: "box" | "corporate" | "booking", targetId: string, today: string): Promise<{ amount: number; toVoucher: boolean }>;
+  redeemVoucherFor(kind: VoucherTargetKind, codeHash: string, targetId: string, maxCents: number, today: string): Promise<number>;
+  returnVoucherFor(kind: VoucherTargetKind, targetId: string, today: string): Promise<{ amount: number; toVoucher: boolean }>;
 
   // Refunds
   setPaymentIntent(sessionId: string, intentId: string): Promise<void>;
@@ -322,4 +323,33 @@ export interface Repository {
   claimStampReward(email: string, earned: number, orderId: string): Promise<number>;
   releaseStampReward(orderId: string): Promise<void>;
   countStampRewards(email: string): Promise<number>;
+
+  // Phase 5 -----------------------------------------------------------------
+  /** One class pass credit on a guest's share, worth up to valueCents. Returns the cents applied, or 0. */
+  redeemPassShare(codeHash: string, guestId: string, valueCents: number, today: string): Promise<number>;
+  /** Give a share's pass credit back, once. */
+  returnPassShare(guestId: string, today: string): Promise<number>;
+  /** A share fully covered by a code: open -> paid with no payment, once. */
+  markSharePaidFree(guestId: string): Promise<boolean>;
+  /** Cancel some seats of a paid booking in one step. False if the booking changed since the quote. */
+  partialCancelBooking(p: PartialCancelWrite): Promise<boolean>;
+}
+
+/** What vouchers and credit codes can be used on (besides cake orders). */
+export type VoucherTargetKind = "box" | "corporate" | "booking" | "share";
+
+export interface PartialCancelWrite {
+  bookingId: string;
+  /** The seats the booking had when the quote was made. */
+  expectedSeats: number;
+  guests: ClassBooking["guests"];
+  discountCents: number;
+  totalCents: number;
+  /** Cash taken off what was paid (refunded or turned into credit). */
+  cashOutCents: number;
+  /** Voucher money taken off the booking (given back as a credit code). */
+  voucherOutCents: number;
+  passCreditsBack: number;
+  today: string;
+  record: PartialCancellation;
 }

@@ -31,7 +31,7 @@ import type {
   WaitlistEntry,
 } from "../domain/types";
 import { isActiveOffer } from "../domain/waitlist";
-import { PAYMENT_HOLD_MINUTES, type MediaFile, type NewOrder, type Repository } from "./repository";
+import { PAYMENT_HOLD_MINUTES, type MediaFile, type NewOrder, type Repository, type VoucherTargetKind } from "./repository";
 import {
   SAMPLE_AUTOMATIONS,
   SAMPLE_BOXES,
@@ -79,7 +79,7 @@ interface Store {
   guests: PrivateGuest[];
   photos: ClassPhoto[];
   passes: ClassPass[];
-  passRedemptions: { passId: string; bookingId: string; credits: number }[];
+  passRedemptions: { passId: string; bookingId: string | null; guestId?: string; credits: number }[];
   targetRedemptions: { voucherId: string; kind: string; targetId: string; amountCents: number }[];
   refunds: RefundRecord[];
   stampRewards: { email: string; n: number; orderId: string }[];
@@ -847,6 +847,10 @@ export const memoryRepository: Repository = {
         holdUntil: null,
         paidAt: null,
         detailsAt: null,
+        voucherId: null,
+        voucherAppliedCents: 0,
+        passId: null,
+        passAppliedCents: 0,
       }),
     );
   },
@@ -962,10 +966,16 @@ export const memoryRepository: Repository = {
     const s = store();
     if (maxCents <= 0) return 0;
     const v = s.vouchers.find((x) => x.codeHash === codeHash);
-    const target: { voucherId?: string | null; voucherAppliedCents?: number } | undefined =
-      kind === "box" ? s.boxOrders.find((x) => x.id === targetId) : kind === "corporate" ? s.corporateOrders.find((x) => x.id === targetId) : s.bookings.find((x) => x.id === targetId);
+    const target = voucherTarget(kind, targetId);
     if (!v || !target || v.status !== "active" || v.expiresOn < today || v.balanceCents <= 0 || target.voucherId) return 0;
-    const amount = Math.min(v.balanceCents, maxCents);
+    let max = maxCents;
+    if (kind === "share") {
+      const g = target as PrivateGuest;
+      if (!shareTakesCode(g)) return 0;
+      max = Math.min(max, g.shareCents - (g.voucherAppliedCents ?? 0) - (g.passAppliedCents ?? 0));
+      if (max <= 0) return 0;
+    }
+    const amount = Math.min(v.balanceCents, max);
     v.balanceCents -= amount;
     s.targetRedemptions.push({ voucherId: v.id, kind, targetId, amountCents: amount });
     target.voucherId = v.id;
@@ -974,7 +984,7 @@ export const memoryRepository: Repository = {
   },
   async returnVoucherFor(kind, targetId, today) {
     const s = store();
-    const target = kind === "box" ? s.boxOrders.find((x) => x.id === targetId) : kind === "corporate" ? s.corporateOrders.find((x) => x.id === targetId) : s.bookings.find((x) => x.id === targetId);
+    const target = voucherTarget(kind, targetId);
     if (!target?.voucherId) return { amount: 0, toVoucher: false };
     const net = s.targetRedemptions.filter((r) => r.kind === kind && r.targetId === targetId && r.voucherId === target.voucherId).reduce((sum, r) => sum + r.amountCents, 0);
     if (net <= 0) return { amount: 0, toVoucher: false };
@@ -1032,4 +1042,93 @@ export const memoryRepository: Repository = {
   async countStampRewards(email) {
     return store().stampRewards.filter((r) => r.email === email.toLowerCase()).length;
   },
+
+  async redeemPassShare(codeHash, guestId, valueCents, today) {
+    const s = store();
+    if (valueCents <= 0) return 0;
+    const p = s.passes.find((x) => x.codeHash === codeHash);
+    const g = s.guests.find((x) => x.id === guestId);
+    if (!p || !g || p.status !== "active" || p.expiresOn < today || p.creditsLeft <= 0 || !shareTakesCode(g)) return 0;
+    const amount = Math.min(valueCents, g.shareCents - (g.voucherAppliedCents ?? 0) - (g.passAppliedCents ?? 0));
+    if (amount <= 0) return 0;
+    p.creditsLeft -= 1;
+    s.passRedemptions.push({ passId: p.id, bookingId: null, guestId, credits: 1 });
+    g.passId = p.id;
+    g.passAppliedCents = amount;
+    return amount;
+  },
+  async returnPassShare(guestId, today) {
+    const s = store();
+    const g = s.guests.find((x) => x.id === guestId);
+    if (!g?.passId) return 0;
+    const net = s.passRedemptions.filter((r) => r.guestId === guestId && r.passId === g.passId).reduce((sum, r) => sum + r.credits, 0);
+    if (net <= 0) return 0;
+    const p = s.passes.find((x) => x.id === g.passId)!;
+    p.creditsLeft = Math.min(p.creditsTotal, p.creditsLeft + net);
+    const ext = plusDays(today, 90);
+    if (p.expiresOn < ext) p.expiresOn = ext;
+    s.passRedemptions.push({ passId: p.id, bookingId: null, guestId, credits: -net });
+    return net;
+  },
+  async markSharePaidFree(guestId) {
+    const g = store().guests.find((x) => x.id === guestId);
+    const now = new Date().toISOString();
+    if (!g || g.status !== "open" || g.shareCents - (g.voucherAppliedCents ?? 0) - (g.passAppliedCents ?? 0) > 0) return false;
+    if (g.holdKey && g.holdUntil && g.holdUntil > now) return false;
+    Object.assign(g, { status: "paid", paidAt: now, holdKey: null, holdUntil: null });
+    return true;
+  },
+  async partialCancelBooking(w) {
+    const s = store();
+    const b = s.bookings.find((x) => x.id === w.bookingId);
+    if (!b || b.status !== "paid" || b.seats !== w.expectedSeats) return false;
+    const newSeats = w.guests.length;
+    if (newSeats < 1 || newSeats >= b.seats) return false;
+    if (w.cashOutCents < 0 || w.cashOutCents > b.amountPaidCents) return false;
+    if (w.voucherOutCents < 0 || w.voucherOutCents > (b.voucherAppliedCents ?? 0)) return false;
+    if (w.passCreditsBack < 0 || w.passCreditsBack > (b.passCredits ?? 0)) return false;
+    const freed = b.seats - newSeats;
+    Object.assign(b, {
+      seats: newSeats,
+      guests: clone(w.guests),
+      discountCents: w.discountCents,
+      totalCents: w.totalCents,
+      amountPaidCents: b.amountPaidCents - w.cashOutCents,
+      voucherAppliedCents: (b.voucherAppliedCents ?? 0) - w.voucherOutCents,
+      passCredits: (b.passCredits ?? 0) - w.passCreditsBack,
+      partialCancellations: [...(b.partialCancellations ?? []), clone(w.record)],
+    });
+    const session = s.sessions.find((y) => y.id === b.sessionId);
+    if (session) session.booked = Math.max(0, session.booked - freed);
+    if (w.voucherOutCents > 0 && b.voucherId) s.targetRedemptions.push({ voucherId: b.voucherId, kind: "booking", targetId: b.id, amountCents: -w.voucherOutCents });
+    if (w.passCreditsBack > 0 && b.passId) {
+      const p = s.passes.find((x) => x.id === b.passId)!;
+      p.creditsLeft = Math.min(p.creditsTotal, p.creditsLeft + w.passCreditsBack);
+      const ext = plusDays(w.today, 90);
+      if (p.expiresOn < ext) p.expiresOn = ext;
+      s.passRedemptions.push({ passId: p.id, bookingId: b.id, credits: -w.passCreditsBack });
+    }
+    return true;
+  },
 };
+
+/** The thing a voucher is being used on (or given back from). */
+function voucherTarget(kind: VoucherTargetKind, id: string): { voucherId?: string | null; voucherAppliedCents?: number } | undefined {
+  const s = store();
+  if (kind === "box") return s.boxOrders.find((x) => x.id === id);
+  if (kind === "corporate") return s.corporateOrders.find((x) => x.id === id);
+  if (kind === "booking") return s.bookings.find((x) => x.id === id);
+  return s.guests.find((x) => x.id === id);
+}
+
+/** A share takes one code, only while open and not held by a live checkout. */
+function shareTakesCode(g: PrivateGuest): boolean {
+  const now = new Date().toISOString();
+  return g.status === "open" && !g.voucherId && !g.passId && !(g.holdKey && g.holdUntil && g.holdUntil > now);
+}
+
+function plusDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
