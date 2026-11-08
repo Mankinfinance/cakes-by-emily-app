@@ -71,7 +71,7 @@ export function classIcs(opts: { uid: string; title: string; date: string; start
   return [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Cakes by Emily//Classes//EN",
+    "PRODID:-//Layered by Cakes by Emily//Classes//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "BEGIN:VEVENT",

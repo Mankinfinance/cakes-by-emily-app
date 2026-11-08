@@ -1,4 +1,4 @@
-# Cakes by Emily: online ordering
+# Layered by Cakes by Emily: online ordering
 
 A mobile-first website where customers design a custom cake, see the price as they go, pick a date and a 30 minute pickup time, and pay a deposit through Stripe. Emily runs everything from a private admin area: orders, progress updates with photos and videos, prices, what's shown on the menu, capacity, days off and peak dates.
 
@@ -215,6 +215,6 @@ npm run build       # production build
 - `src/lib/services`: order workflows, Stripe, email and private link tokens.
 - `src/app`: pages and API routes. Emily's admin is under `src/app/admin`.
 - `supabase/migrations`: the database schema, Row Level Security, and the functions that must be exact: recording a payment once, taking box stock, and using or giving back voucher balance. Add changes as **new** files; never edit one that may already have been run.
-- The business name lives in `src/lib/config.ts` if Emily picks a different brand.
+- The site name ("Layered by Cakes by Emily") and business details live in `src/lib/config.ts`.
 
 **What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, guest places and share holds, pass credits, voucher redemption and returns on every kind of order, refund totals, stamp card claims, referral rules, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout (and pretend refunds). **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).

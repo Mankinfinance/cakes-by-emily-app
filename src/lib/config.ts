@@ -1,9 +1,10 @@
-// Business details in one place. Change the name here if Emily picks a
-// different brand (for example "Layered").
+// Business details in one place. The ordering site is "Layered by Cakes by Emily";
+// the business itself (and its Instagram) is Cakes by Emily.
 
 export const BUSINESS = {
-  name: "Cakes by Emily",
-  shortName: "Cakes by Emily",
+  name: "Layered by Cakes by Emily",
+  shortName: "Layered",
+  business: "Cakes by Emily",
   instagram: "_cakes_by_emily_",
   suburb: "Grasmere",
   tagline: "Custom celebration cakes, made in Grasmere",
