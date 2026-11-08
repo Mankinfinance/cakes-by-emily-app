@@ -2,7 +2,7 @@
 
 A mobile-first website where customers design a custom cake, see the price as they go, pick a date and a 30 minute pickup time, and pay a deposit through Stripe. Emily runs everything from a private admin area: orders, progress updates with photos and videos, prices, what's shown on the menu, capacity, days off and peak dates.
 
-This is **phase 1** of the plan. Seasonal boxes, corporate packages, gift vouchers, classes and the other ideas from the concept demo come later.
+This covers **phases 1 and 2** of the plan: ordering and payments, then the time-savers (automatic messages, design approval, a waitlist, a kitchen sheet, change or cancel under Emily's terms) and seasonal boxes and gift vouchers. Corporate packages, reviews, referrals, classes and the other ideas from the concept demo come in later phases.
 
 > **All prices in this code are samples** copied from the concept demo. Emily sets her real prices in the admin before launch.
 
@@ -17,7 +17,12 @@ This is **phase 1** of the plan. Seasonal boxes, corporate packages, gift vouche
 - An optional inspiration photo (resized in the browser, checked on the server).
 - Terms to accept at checkout, and secure payment on Stripe's own page (50% deposit, or full payment for rush orders).
 - A private order page (an unguessable link, emailed to the customer) with a progress tracker, Emily's photo and video updates, and a "pay balance" button.
-- Emails: order confirmation, stage updates, new photo/video updates, a balance reminder 4 days before pickup, and pickup details the day before.
+- Emails: order confirmation, stage updates, new photo/video updates, a balance reminder, pickup details, a thank-you with a review link, and (for birthdays, if the customer ticks the box) a reminder before next year's birthday. The order page shows which messages have been sent and which are scheduled.
+- **Design approval** (phase 2): when Emily sends a sketch, the order page shows it with "Approve design" and "Request a change". One change round is free (a setting); after that the customer is told extra changes may cost more.
+- **Change or cancel** (phase 2): the order page shows what applies today under Emily's terms: whether the design and date can still change, and exactly what happens to the money if they cancel ("Today is 20 days before pickup. If you cancel, you'll get $45 back ($65 paid minus the $20 admin fee)."). Customers can move their date once for free (if there's room and the price is the same) or cancel with a confirm step.
+- **Waitlist** (phase 2): fully booked dates can be tapped to join a waitlist with the cake design saved. When a place frees up, the first person gets an email with a claim link that holds the place for 24 hours, then it moves to the next person.
+- **Seasonal boxes** (phase 2, `/boxes`): limited pre-order boxes with stock left and a countdown, paid in full.
+- **Gift vouchers** (phase 2, `/vouchers`): buy a voucher and the code is emailed (to the recipient too, if given). Codes are applied at checkout as credit, partial balances carry over, and they expire after 12 months (a setting).
 
 **For Emily (at `/admin`)**
 
@@ -27,6 +32,14 @@ This is **phase 1** of the plan. Seasonal boxes, corporate packages, gift vouche
 - Prices and menu: change names, prices and allergens, add items, and untick **Show to customers** to hide anything. Hidden items vanish from the builder straight away; orders that already include them keep them. You can't hide the last option in a required step (for example the last size).
 - Calendar and settings: notice period, capacity, pickup hours and slot limit, closed weekdays, rush fee and on/off, deposit percentage, reminder timing, checkout terms, days off and peak dates.
 - New order alert emails.
+- **Kitchen sheet** (`/admin/kitchen`): day and week views in pickup order, allergies highlighted, tick-offs saved, and a clean A4 print layout.
+- **Waitlist** (`/admin/waitlist`): who is waiting for each date and whether they have an offer.
+- **Seasonal boxes** (`/admin/boxes`): add and edit boxes (price, how many, when pre-orders open and close, pickup window), a "Show to customers" switch, and the pre-order list.
+- **Gift vouchers and credit** (`/admin/vouchers`): voucher amounts (each with its own "Show to customers" switch), custom amounts, how long codes last, every code with its balance, and a "void" button.
+- **Automatic messages** (`/admin/automations`): turn each message on or off and change when the scheduled ones go out.
+- **Send a design for approval** from any new order, with a sketch or mood board.
+- **Terms settings**: the cancellation windows, admin fee, free date changes and free design change rounds. The checkout terms and the `/terms` page are written from these.
+- **Cancellations never refund automatically.** Each cancelled order records what is owed: the order page and an email tell Emily exactly how much to refund in the Stripe dashboard. When Emily cancels an order, everything paid is refunded. Credit from a cancellation is emailed to the customer as a **credit code**, and any voucher or credit used on a cancelled order is always given back as credit.
 
 ## Keeping customer data safe
 
@@ -37,6 +50,9 @@ This is **phase 1** of the plan. Seasonal boxes, corporate packages, gift vouche
 - **Admin needs two-factor**, and only emails on the `ADMIN_EMAILS` list can get in.
 - Stripe webhooks are signature-checked and safe to retry (a payment is never counted twice).
 - Uploads are limited by type and size, and the file contents are checked.
+- **Voucher and credit codes** are only stored as a fingerprint (hash) plus their last 4 characters. Using a code is done in one database step, so a code can't be spent twice even if two orders try at the same moment. Checking a code is rate limited to stop guessing.
+- **Seasonal box stock** is taken in one database step with a check that sold never exceeds the cap, so boxes can't be oversold. Unpaid checkouts are released by the daily job.
+- **Automatic messages** are recorded before they are sent, so none can go out twice.
 - Only the details an order needs are collected. Marketing emails are opt-in.
 - Draft **privacy policy** (`/privacy`) and **terms** (`/terms`) pages are included, with [placeholders] for Emily's real wording. Have them checked before launch.
 
@@ -69,8 +85,8 @@ Open http://localhost:3000. This **test mode** keeps everything in memory (it di
 ### 2. Supabase
 
 1. Create a project (region: Sydney).
-2. Run the database setup: either install the [Supabase CLI](https://supabase.com/docs/guides/cli) and run `supabase link` then `supabase db push`, or paste `supabase/migrations/20261108000000_initial_schema.sql` into the SQL editor and run it.
-3. Load the sample menu: paste `supabase/seed.sql` into the SQL editor and run it. (Regenerate it from `src/lib/data/sample-data.ts` with `npm run seed:sql` if you change the samples.)
+2. Run the database setup: either install the [Supabase CLI](https://supabase.com/docs/guides/cli) and run `supabase link` then `supabase db push`, or paste each file in `supabase/migrations` into the SQL editor and run them **in order** (oldest first). If you already ran the first one, just run the newer ones. Never edit a migration that has already been run.
+3. Load the sample menu: paste `supabase/seed.sql` into the SQL editor and run it. It's safe to run again after a new migration (it only adds what's missing). (Regenerate it from `src/lib/data/sample-data.ts` with `npm run seed:sql` if you change the samples.)
 4. Create Emily's login: Authentication, Users, Add user (email and a strong password). Turn off public sign ups under Authentication, Sign In / Providers.
 5. Optional, for viewing data in the Supabase dashboard as an admin: add her user id to the `admins` table.
 6. Two-factor: Authentication, Multi-Factor, make sure **TOTP** (authenticator app) is enabled. The first time Emily signs in to `/admin` she scans a QR code with her authenticator app; after that she enters a 6 digit code each time. The site checks for this on every admin page (`ADMIN_REQUIRE_MFA=true`).
@@ -93,7 +109,11 @@ Add and verify the business domain, create an API key, and set `EMAIL_FROM` to a
 1. Import the GitHub repository.
 2. Add every variable from `.env.example` under Settings, Environment Variables (Production). Do **not** set `DATA_ADAPTER` or `E2E_AUTH_BYPASS`.
 3. Deploy, then add the custom domain.
-4. The daily reminder job is set in `vercel.json` (22:00 UTC, which is 9am in Sydney during daylight saving and 8am otherwise). Vercel sends `CRON_SECRET` with each run.
+4. The daily job is set in `vercel.json` (22:00 UTC, which is 9am in Sydney during daylight saving and 8am otherwise). Vercel sends `CRON_SECRET` with each run. Each run:
+   - cancels checkouts that were never paid (after an hour) and releases what they held: seasonal box stock, voucher balance, and the date (which is offered to the waitlist);
+   - ends waitlist offers older than 24 hours and offers the place to the next person;
+   - sends the scheduled automatic messages that are due and switched on.
+   Every part is safe to run more than once.
 
 ### Environment variables
 
@@ -115,7 +135,9 @@ From the plan doc, "Checks before taking real orders". These are things to confi
 - [ ] Check the NSW Food Authority's home-based food business requirements, including any food safety supervisor or training requirement.
 - [ ] Confirm allergen details for every flavour, finish, decoration and extra in `/admin`.
 - [ ] Public liability insurance that covers products sold.
-- [ ] Written terms checked and entered in the admin (deposits, refunds, changes, cake care, rush and peak fees).
+- [ ] Written terms checked and entered in the admin (deposits, refunds, changes, cake care, rush and peak fees). The cancellation windows, admin fee and free changes are settings in `/admin/settings`.
+- [ ] Review link (a Google review URL) added in `/admin/settings`.
+- [ ] Seasonal boxes and voucher amounts replaced with real ones (the seeded ones are samples).
 - [ ] Privacy policy and terms pages filled in (`src/app/privacy/page.tsx`, `src/app/terms/page.tsx`).
 - [ ] Real prices, notice period, capacity, pickup hours and pickup details (`PICKUP_DETAILS`).
 - [ ] Original high-resolution photos for the home page.
@@ -136,7 +158,7 @@ npm run build       # production build
 - `src/lib/data`: the data adapter. `supabase.ts` for the live site, `memory.ts` for tests (`DATA_ADAPTER=memory`).
 - `src/lib/services`: order workflows, Stripe, email and private link tokens.
 - `src/app`: pages and API routes. Emily's admin is under `src/app/admin`.
-- `supabase/migrations`: the database schema, Row Level Security and the exactly-once payment function.
+- `supabase/migrations`: the database schema, Row Level Security, and the functions that must be exact: recording a payment once, taking box stock, and using or giving back voucher balance. Add changes as **new** files; never edit one that may already have been run.
 - The business name lives in `src/lib/config.ts` if Emily picks a different brand.
 
-**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar and order code, the real SQL migration on PGlite (Postgres in WebAssembly, with small stand-ins for Supabase's auth and storage), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout. **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).
+**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, voucher redemption and returns. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout. **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).
