@@ -20,11 +20,26 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
             <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin">
               Orders
             </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/kitchen">
+              Kitchen
+            </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/waitlist">
+              Waitlist
+            </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/boxes">
+              Boxes
+            </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/vouchers">
+              Vouchers
+            </Link>
+            <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/automations">
+              Messages
+            </Link>
             <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/catalogue">
               Prices and menu
             </Link>
             <Link className="rounded-full px-3 py-1.5 hover:bg-blush" href="/admin/settings">
-              Calendar and settings
+              Settings
             </Link>
             <form action="/admin/signout" method="post">
               <button className="rounded-full px-3 py-1.5 text-muted hover:bg-blush" title={admin.email}>

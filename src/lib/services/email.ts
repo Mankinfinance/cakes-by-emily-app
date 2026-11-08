@@ -7,7 +7,7 @@ import { formatDateLong, formatTime12 } from "../domain/dates";
 import { formatAud } from "../domain/money";
 import { balanceOwing } from "../domain/pricing";
 import { STAGE_MESSAGES, stageLabel } from "../domain/stages";
-import type { Order, Stage } from "../domain/types";
+import type { BoxOrder, CancellationRecord, Order, Stage, Voucher, WaitlistEntry } from "../domain/types";
 
 export interface Email {
   to: string;
@@ -63,9 +63,22 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
-function render(paragraphs: string[], link?: { href: string; label: string }): { text: string; html: string } {
-  const text = [...paragraphs, ...(link ? [`${link.label}: ${link.href}`] : []), "", BUSINESS.name].join("\n\n");
-  const body = paragraphs.map((p) => `<p style="margin:0 0 14px">${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+function render(
+  paragraphs: string[],
+  link?: { href: string; label: string },
+  highlight?: { label: string; value: string },
+): { text: string; html: string } {
+  const text = [
+    ...paragraphs,
+    ...(highlight ? [`${highlight.label}: ${highlight.value}`] : []),
+    ...(link ? [`${link.label}: ${link.href}`] : []),
+    "",
+    BUSINESS.name,
+  ].join("\n\n");
+  const code = highlight
+    ? `<div style="margin:20px 0;padding:18px;border:2px dashed #B8955A;border-radius:14px;text-align:center;background:#FBF7F4"><p style="margin:0 0 6px;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:#75636B">${escapeHtml(highlight.label)}</p><p style="margin:0;font-family:'Courier New',monospace;font-size:22px;font-weight:700;letter-spacing:0.08em;color:#2E2027">${escapeHtml(highlight.value)}</p></div>`
+    : "";
+  const body = paragraphs.map((p) => `<p style="margin:0 0 14px">${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("") + code;
   const button = link
     ? `<p style="margin:22px 0"><a href="${escapeHtml(link.href)}" style="background:#B4506E;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none;font-weight:600">${escapeHtml(link.label)}</a></p>`
     : "";
@@ -150,10 +163,10 @@ export function balanceReminderEmail(o: Order, link: string): Email {
 export function pickupDetailsEmail(o: Order, link: string, details: string): Email {
   return {
     to: o.email,
-    subject: `Pickup tomorrow at ${formatTime12(o.pickupSlot)}`,
+    subject: `Pickup details: ${when(o)}`,
     ...render(
       [
-        `Hi ${firstName(o)}, your cake is nearly ready! See you tomorrow, ${when(o)}.`,
+        `Hi ${firstName(o)}, your cake is nearly ready! See you on ${when(o)}.`,
         details,
         "Cake care: keep your cake flat and cool in the car, out of direct sun, and refrigerate if it is a hot day.",
       ],
@@ -170,5 +183,219 @@ export function balanceReceiptEmail(o: Order, link: string): Email {
       href: link,
       label: "View your order",
     }),
+  };
+}
+
+// Phase 2 templates ------------------------------------------------------
+
+export function designForApprovalEmail(o: Order, note: string, link: string): Email {
+  return {
+    to: o.email,
+    subject: "Your cake design is ready to approve",
+    ...render(
+      [
+        `Hi ${firstName(o)}, Emily has sketched your cake design.`,
+        note ? `Emily's note: "${note}"` : "",
+        "Please take a look and approve it, or ask for a change, from your order page.",
+      ].filter(Boolean),
+      { href: link, label: "See your design" },
+    ),
+  };
+}
+
+export function changeRequestedAlertEmail(o: Order, request: string, adminLink: string, to: string, extraRound: boolean): Email {
+  return {
+    to,
+    subject: `Design change requested: ${o.reference}`,
+    ...render(
+      [
+        `${o.customerName} asked for a change to their design:`,
+        `"${request}"`,
+        extraRound ? "They have used their free change round, so you may want to confirm any extra cost." : "",
+      ].filter(Boolean),
+      { href: adminLink, label: "Open the order" },
+    ),
+  };
+}
+
+export function designApprovedAlertEmail(o: Order, adminLink: string, to: string): Email {
+  return {
+    to,
+    subject: `Design approved: ${o.reference}`,
+    ...render([`${o.customerName} approved their design for ${when(o)}.`], { href: adminLink, label: "Open the order" }),
+  };
+}
+
+export function thankYouEmail(o: Order, link: string, reviewUrl: string): Email {
+  return {
+    to: o.email,
+    subject: `Thank you from ${BUSINESS.name}`,
+    ...render(
+      [
+        `Hi ${firstName(o)}, thank you so much for choosing ${BUSINESS.name}! I hope everyone loved the cake.`,
+        reviewUrl
+          ? "If you have a minute, a quick review would mean the world to a small business like mine, and a photo of the cake at the party is always a bonus."
+          : "If you have a moment, I'd love to see a photo of the cake at the party. Tag @" + BUSINESS.instagram + " on Instagram.",
+      ],
+      reviewUrl ? { href: reviewUrl, label: "Leave a review" } : { href: link, label: "View your order" },
+    ),
+  };
+}
+
+export function rebookReminderEmail(o: Order, orderUrl: string): Email {
+  return {
+    to: o.email,
+    subject: "A birthday is coming up!",
+    ...render(
+      [
+        `Hi ${firstName(o)}, last year you asked me to remind you before the next birthday. It's almost that time again!`,
+        "Dates book out quickly, so get in early if you'd like a cake.",
+      ],
+      { href: orderUrl, label: "Design this year's cake" },
+    ),
+  };
+}
+
+export function waitlistJoinedEmail(w: WaitlistEntry, place: number): Email {
+  return {
+    to: w.email,
+    subject: `You're on the waitlist for ${formatDateLong(w.date)}`,
+    ...render([
+      `Hi ${w.customerName.split(" ")[0]}, you're number ${place} on the waitlist for ${formatDateLong(w.date)}.`,
+      "If a spot opens up, I'll email you a link to claim it. You'll have 24 hours to book before it goes to the next person.",
+    ]),
+  };
+}
+
+export function waitlistOfferEmail(w: WaitlistEntry, claimLink: string, expiresAt: string): Email {
+  const until = new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short", timeZone: "Australia/Sydney" }).format(new Date(expiresAt));
+  return {
+    to: w.email,
+    subject: `A spot opened on ${formatDateLong(w.date)}`,
+    ...render(
+      [
+        `Hi ${w.customerName.split(" ")[0]}, good news! A spot has opened up on ${formatDateLong(w.date)}.`,
+        `It's held for you until ${until}. Your cake design is saved, so you just need to pick a pickup time and pay the deposit.`,
+      ],
+      { href: claimLink, label: "Claim your spot" },
+    ),
+  };
+}
+
+export function cancellationEmail(o: Order, r: CancellationRecord, link: string): Email {
+  return {
+    to: o.email,
+    subject: `Order ${o.reference} cancelled`,
+    ...render(
+      [
+        `Hi ${firstName(o)}, your order ${o.reference} for ${formatDateLong(o.pickupDate)} has been cancelled.`,
+        r.summary,
+        r.refundCents > 0 ? `Your refund of ${formatAud(r.refundCents)} will be made to your card within a few business days.` : "",
+        r.creditCents + r.voucherReturnedCents > 0 ? "Any credit has been sent in a separate email with your code." : "",
+      ].filter(Boolean),
+      { href: link, label: "View your order" },
+    ),
+  };
+}
+
+export function cancellationAlertEmail(o: Order, r: CancellationRecord, adminLink: string, to: string): Email {
+  return {
+    to,
+    subject: `Cancelled: ${o.reference}${r.refundCents > 0 ? ` (refund ${formatAud(r.refundCents)} in Stripe)` : ""}`,
+    ...render(
+      [
+        `${o.customerName}'s order for ${when(o)} was cancelled by ${r.by === "emily" ? "you" : "the customer"}.`,
+        r.refundCents > 0 ? `ACTION: refund ${formatAud(r.refundCents)} in the Stripe dashboard.` : "No cash refund is due.",
+        r.creditCents > 0 ? `${formatAud(r.creditCents)} was issued as a credit code.` : "",
+        r.voucherReturnedCents > 0 ? `${formatAud(r.voucherReturnedCents)} of voucher or credit was given back.` : "",
+      ].filter(Boolean),
+      { href: adminLink, label: "Open the order" },
+    ),
+  };
+}
+
+export function creditCodeEmail(to: string, name: string, code: string, amountCents: number, expiresOn: string, reason: string): Email {
+  return {
+    to,
+    subject: `Your ${formatAud(amountCents)} credit with ${BUSINESS.name}`,
+    ...render(
+      [
+        `Hi ${name.split(" ")[0] || "there"}, ${reason}`,
+        `You have ${formatAud(amountCents)} of credit to use on a future order. Enter the code at checkout. It's valid until ${formatDateLong(expiresOn)}.`,
+        "Keep this email safe: anyone with the code can use the credit.",
+      ],
+      undefined,
+      { label: "Credit code", value: code },
+    ),
+  };
+}
+
+export function dateChangedEmail(o: Order, link: string): Email {
+  return {
+    to: o.email,
+    subject: `New pickup time for order ${o.reference}`,
+    ...render([`Hi ${firstName(o)}, your pickup is now ${when(o)}. See you then!`], { href: link, label: "View your order" }),
+  };
+}
+
+export function dateChangedAlertEmail(o: Order, from: string, adminLink: string, to: string): Email {
+  return {
+    to,
+    subject: `Date moved: ${o.reference}`,
+    ...render([`${o.customerName} moved their pickup from ${from} to ${when(o)}.`], { href: adminLink, label: "Open the order" }),
+  };
+}
+
+const boxWhen = (b: BoxOrder) => `${formatDateLong(b.pickupDate)} at ${formatTime12(b.pickupSlot)}`;
+
+export function boxConfirmationEmail(b: BoxOrder, link: string): Email {
+  return {
+    to: b.email,
+    subject: `Pre-order ${b.reference} confirmed: ${b.boxName}`,
+    ...render(
+      [
+        `Hi ${b.customerName.split(" ")[0]}, thank you! Your pre-order is confirmed.`,
+        `${b.quantity} x ${b.boxName}, paid ${formatAud(b.amountPaidCents)}.`,
+        `Pickup: ${boxWhen(b)} in ${BUSINESS.suburb}.`,
+      ],
+      { href: link, label: "View your pre-order" },
+    ),
+  };
+}
+
+export function boxAlertEmail(b: BoxOrder, to: string): Email {
+  return {
+    to,
+    subject: `New pre-order ${b.reference}: ${b.quantity} x ${b.boxName}`,
+    ...render([`${b.customerName} (${b.email}, ${b.phone}) pre-ordered ${b.quantity} x ${b.boxName}.`, `Pickup: ${boxWhen(b)}.`]),
+  };
+}
+
+export function voucherEmail(v: Voucher, code: string, to: "buyer" | "recipient"): Email {
+  const forName = v.recipientName || "you";
+  const paragraphs =
+    to === "buyer"
+      ? [
+          `Hi ${v.buyerName.split(" ")[0]}, thank you for buying a ${formatAud(v.amountCents)} gift voucher for ${forName}!`,
+          v.recipientEmail ? `We've also emailed it to ${v.recipientEmail}.` : "Forward this email, or print it, to give it to them.",
+        ]
+      : [`Hi ${v.recipientName.split(" ")[0] || "there"}, ${v.buyerName} has sent you a ${formatAud(v.amountCents)} gift voucher for ${BUSINESS.name}!`];
+  if (v.message) paragraphs.push(`"${v.message}"`);
+  paragraphs.push(`Use the code at checkout when you design your cake. Valid until ${formatDateLong(v.expiresOn)}.`);
+  return {
+    to: to === "buyer" ? v.buyerEmail : v.recipientEmail,
+    subject: to === "buyer" ? `Your ${BUSINESS.name} gift voucher` : `${v.buyerName} sent you a ${BUSINESS.name} gift voucher`,
+    ...render(paragraphs, undefined, { label: `${formatAud(v.amountCents)} gift voucher`, value: code }),
+  };
+}
+
+export function latePaymentAlertEmail(reference: string, amountCents: number, to: string): Email {
+  return {
+    to,
+    subject: `Payment for expired order ${reference}`,
+    ...render([
+      `A payment of ${formatAud(amountCents)} arrived for ${reference} after it had expired and been cancelled.`,
+      "ACTION: refund it in the Stripe dashboard, or contact the customer to re-book.",
+    ]),
   };
 }

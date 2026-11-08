@@ -8,6 +8,7 @@ export const CATEGORIES = [
   "colour",
   "decoration",
   "extra",
+  "addon",
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
 
@@ -21,7 +22,7 @@ export const REQUIRED_CATEGORIES: readonly Category[] = [
 ];
 
 /** Categories where the customer may pick several options. */
-export const MULTI_CATEGORIES: readonly Category[] = ["decoration", "extra"];
+export const MULTI_CATEGORIES: readonly Category[] = ["decoration", "extra", "addon"];
 
 export const ALLERGENS = ["gluten", "egg", "dairy", "nuts", "soy", "sesame"] as const;
 export type Allergen = (typeof ALLERGENS)[number];
@@ -51,6 +52,8 @@ export interface CatalogueItem {
   allergens: Allergen[];
   visible: boolean;
   sort: number;
+  /** Party add-ons only: a refundable bond (for example cake stand hire). */
+  bondCents: number;
 }
 
 export interface Settings {
@@ -96,6 +99,34 @@ export interface Settings {
   voucherCustomMaxCents: number;
   /** Where the thank-you message sends people to leave a review (for example a Google review link). */
   reviewUrl: string;
+  // Phase 3
+  referralsEnabled: boolean;
+  /** What the new customer gets off their first order. */
+  referralGiveCents: number;
+  /** Credit the referrer gets when the new customer's deposit is paid. */
+  referralGetCents: number;
+  stampsEnabled: boolean;
+  /** Every Nth collected order earns a reward. */
+  stampEvery: number;
+  stampRewardName: string;
+  /** Group discount on class bookings. */
+  groupDiscountMinSeats: number;
+  groupDiscountPercent: number;
+  /** When true, days with a class (or an accepted private class) take no cake orders. */
+  classBlocksCakes: boolean;
+  privatePackages: PrivatePackage[];
+}
+
+export interface PrivatePackage {
+  key: string;
+  name: string;
+  includes: string;
+  perPersonCents: number;
+  depositCents: number;
+  minGuests: number;
+  maxGuests: number;
+  kids: boolean;
+  visible: boolean;
 }
 
 export interface VoucherOption {
@@ -147,12 +178,14 @@ export interface CakeConfig {
   colour: string;
   decorations: string[];
   extras: string[];
+  /** Party add-ons chosen at checkout (phase 3). Older saved designs may not have it. */
+  addons?: string[];
   topperText: string;
 }
 
 export interface PriceLine {
   itemId: string | null;
-  category: Category | "rush" | "peak";
+  category: Category | "rush" | "peak" | "bond" | "referral" | "reward";
   name: string;
   amountCents: number;
 }
@@ -162,6 +195,8 @@ export interface PriceBreakdown {
   subtotalCents: number;
   rushFeeCents: number;
   peakSurchargeCents: number;
+  bondCents: number;
+  referralDiscountCents: number;
   totalCents: number;
   depositCents: number;
   isRush: boolean;
@@ -213,6 +248,9 @@ export interface Order {
   waitlistId: string | null;
   kitchenDone: boolean;
   cancellation: CancellationRecord | null;
+  /** Phase 3: a referral code used on this order, and whether a stamp card reward was applied. */
+  referralCode: string | null;
+  stampReward: boolean;
 }
 
 export interface CancellationRecord {
@@ -241,11 +279,14 @@ export interface OrderUpdate {
 
 export interface Payment {
   id: string;
-  /** Exactly one of orderId, boxOrderId or voucherId is set. */
+  /** Exactly one target is set. */
   orderId: string | null;
   boxOrderId: string | null;
   voucherId: string | null;
-  kind: "deposit" | "balance" | "box" | "voucher";
+  corporateOrderId?: string | null;
+  classBookingId?: string | null;
+  privateRequestId?: string | null;
+  kind: "deposit" | "balance" | "box" | "voucher" | "corporate_deposit" | "corporate_balance" | "class" | "private_deposit";
   amountCents: number;
   stripeSessionId: string;
   status: "pending" | "paid";
@@ -261,6 +302,9 @@ export const AUTOMATION_KEYS = [
   "pickup_details",
   "thank_you",
   "rebook_reminder",
+  "stand_return",
+  "class_reminder",
+  "class_thank_you",
 ] as const;
 export type AutomationKey = (typeof AUTOMATION_KEYS)[number];
 
@@ -288,6 +332,9 @@ export type WaitlistStatus = "waiting" | "offered" | "claimed" | "expired" | "re
 export interface WaitlistEntry {
   id: string;
   date: string;
+  /** Set for a class session waitlist (phase 3); null for cake dates. */
+  sessionId?: string | null;
+  seats?: number;
   customerName: string;
   email: string;
   phone: string;
@@ -363,5 +410,164 @@ export interface Voucher {
   message: string;
   expiresOn: string;
   sourceOrderId: string | null;
+  createdAt: string;
+}
+
+// Phase 3: corporate packages ---------------------------------------------
+
+export interface CorporatePackage {
+  id: string;
+  product: "cookies" | "cupcakes";
+  name: string;
+  quantity: number;
+  priceCents: number;
+  visible: boolean;
+  sort: number;
+}
+
+export type CorporateStatus = "awaiting_payment" | "confirmed" | "ready" | "collected" | "cancelled";
+
+export interface CorporateOrder {
+  id: string;
+  reference: string;
+  tokenHash: string;
+  packageId: string;
+  packageName: string;
+  quantity: number;
+  totalCents: number;
+  depositCents: number;
+  amountPaidCents: number;
+  companyName: string;
+  abn: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  logoPath: string | null;
+  notes: string;
+  pickupDate: string;
+  pickupSlot: string;
+  status: CorporateStatus;
+  kitchenDone: boolean;
+  termsAcceptedAt: string;
+  createdAt: string;
+}
+
+// Phase 3: reviews -------------------------------------------------------------
+
+export type ReviewStatus = "pending" | "approved" | "hidden";
+
+export interface Review {
+  id: string;
+  orderId: string;
+  rating: number;
+  text: string;
+  photoPath: string | null;
+  consentToPublish: boolean;
+  displayName: string;
+  status: ReviewStatus;
+  createdAt: string;
+}
+
+// Phase 3: referrals --------------------------------------------------------------
+
+export interface ReferralCode {
+  code: string;
+  email: string;
+  createdAt: string;
+}
+
+export type ReferralStatus = "pending" | "rewarded" | "void";
+
+export interface Referral {
+  id: string;
+  code: string;
+  referrerEmail: string;
+  referredEmail: string;
+  orderId: string;
+  status: ReferralStatus;
+  createdAt: string;
+}
+
+// Phase 3: classes -------------------------------------------------------------------
+
+export interface ClassType {
+  id: string;
+  name: string;
+  description: string;
+  level: string;
+  priceCents: number;
+  durationMinutes: number;
+  defaultSeats: number;
+  minGuests: number;
+  isSip: boolean;
+  ageNote: string;
+  visible: boolean;
+  sort: number;
+}
+
+export interface ClassSession {
+  id: string;
+  classTypeId: string;
+  date: string;
+  startTime: string;
+  seats: number;
+  booked: number;
+  status: "scheduled" | "cancelled";
+  seriesId: string | null;
+  createdAt: string;
+}
+
+export interface ClassGuest {
+  name: string;
+  allergies: string;
+  checkedIn: boolean;
+}
+
+export type ClassBookingStatus = "awaiting_payment" | "paid" | "cancelled";
+
+export interface ClassBooking {
+  id: string;
+  reference: string;
+  tokenHash: string;
+  sessionId: string;
+  seats: number;
+  guests: ClassGuest[];
+  contactName: string;
+  email: string;
+  phone: string;
+  unitPriceCents: number;
+  discountCents: number;
+  totalCents: number;
+  amountPaidCents: number;
+  status: ClassBookingStatus;
+  adultConfirmed: boolean;
+  marketingOptIn: boolean;
+  waitlistId: string | null;
+  cancellation: CancellationRecord | null;
+  termsAcceptedAt: string;
+  createdAt: string;
+}
+
+export type PrivateRequestStatus = "requested" | "accepted" | "declined" | "paid";
+
+export interface PrivateRequest {
+  id: string;
+  reference: string;
+  packageKey: string;
+  packageName: string;
+  guests: number;
+  perPersonCents: number;
+  depositCents: number;
+  estimateCents: number;
+  preferredDate: string;
+  preferredTime: string;
+  occasion: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  notes: string;
+  status: PrivateRequestStatus;
+  payTokenHash: string | null;
+  amountPaidCents: number;
   createdAt: string;
 }

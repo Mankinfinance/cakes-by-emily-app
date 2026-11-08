@@ -2,7 +2,8 @@
 // website can rebuild it for reminder emails, but the database only stores a
 // SHA-256 hash of it. Someone with a copy of the database alone cannot open orders.
 
-import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { formatCode, normalizeCode } from "../domain/vouchers";
 
 const TEST_SECRET = "memory-mode-test-secret-not-for-production-use";
 
@@ -15,6 +16,29 @@ function secret(): string {
 
 export function orderToken(orderId: string): string {
   return createHmac("sha256", secret()).update(`order:${orderId}`).digest("base64url");
+}
+
+/** Private link for a seasonal box order. */
+export function boxToken(boxOrderId: string): string {
+  return createHmac("sha256", secret()).update(`box:${boxOrderId}`).digest("base64url");
+}
+
+/**
+ * A voucher or credit code, derived from its id with the secret so it can be
+ * emailed after payment while the database only keeps its hash.
+ */
+export function voucherCode(voucherId: string): string {
+  const mac = createHmac("sha256", secret()).update(`voucher:${voucherId}`).digest();
+  return formatCode(new Uint8Array(mac.subarray(0, 10)));
+}
+
+export function hashCode(code: string): string {
+  return createHash("sha256").update(`code:${normalizeCode(code)}`).digest("hex");
+}
+
+/** A random one-off token (waitlist claim links). Only its hash is stored. */
+export function randomToken(): string {
+  return randomBytes(32).toString("base64url");
 }
 
 export function hashToken(token: string): string {
@@ -33,9 +57,9 @@ export function safeEqual(a: string, b: string): boolean {
 
 const REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-/** A short reference customers can quote, e.g. CBE-7K3QX. */
-export function newReference(): string {
+/** A short reference customers can quote, e.g. CBE-7K3QX (boxes use BOX-). */
+export function newReference(prefix = "CBE"): string {
   let out = "";
   for (let i = 0; i < 5; i++) out += REF_ALPHABET[randomInt(REF_ALPHABET.length)];
-  return `CBE-${out}`;
+  return `${prefix}-${out}`;
 }

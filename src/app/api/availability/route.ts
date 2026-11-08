@@ -1,6 +1,6 @@
 import { errorResponse, json } from "@/lib/http";
 import { getRepo } from "@/lib/data";
-import { monthAvailability } from "@/lib/services/orders";
+import { monthAvailability } from "@/lib/services/calendar";
 
 export async function GET(request: Request) {
   const month = new URL(request.url).searchParams.get("month") ?? "";

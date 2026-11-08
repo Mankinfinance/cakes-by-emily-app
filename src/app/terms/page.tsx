@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
 import { getRepo } from "@/lib/data";
 import { formatAud } from "@/lib/domain/money";
+import { termsLines } from "@/lib/domain/terms";
 
 export const metadata: Metadata = { title: "Terms" };
 
@@ -22,10 +23,15 @@ export default async function Terms() {
           A {s.depositPercent}% deposit secures your date. The balance is due {s.balanceDueDays} days before pickup. Rush orders (inside{" "}
           {s.minNoticeDays} days) include a {formatAud(s.rushFeeCents)} rush fee and are paid in full when you order.
         </p>
-        <h2 className="mt-6 font-serif text-xl">Cancellations and refunds</h2>
-        <p className="mt-2 whitespace-pre-line">{s.cancellationPolicy}</p>
-        <h2 className="mt-6 font-serif text-xl">Changes</h2>
-        <p className="mt-2">Design changes are welcome up to {s.changeCutoffDays} days before pickup, subject to availability and any price difference.</p>
+        <h2 className="mt-6 font-serif text-xl">Cancellations, changes and credit</h2>
+        <ul className="mt-2 list-disc space-y-1 pl-5" data-testid="terms-rules">
+          {termsLines(s).map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+        {s.cancellationPolicy && <p className="mt-2 whitespace-pre-line">{s.cancellationPolicy}</p>}
+        <h2 className="mt-6 font-serif text-xl">Seasonal boxes and gift vouchers</h2>
+        <p className="mt-2">Seasonal boxes and gift vouchers are paid in full when you order and aren&apos;t refundable. [Emily to confirm.]</p>
         <h2 className="mt-6 font-serif text-xl">Allergies</h2>
         <p className="mt-2">
           Our kitchen handles nuts, gluten, egg, dairy, soy and sesame. We take care, but cannot guarantee any cake is free from traces. Please

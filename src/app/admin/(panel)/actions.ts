@@ -9,9 +9,10 @@ import { getRepo } from "@/lib/data";
 import type { UploadTarget } from "@/lib/data/repository";
 import { canSetVisibility } from "@/lib/domain/visibility";
 import { getMailer } from "@/lib/services/email";
+import { AUTOMATION_KEYS } from "@/lib/domain/types";
+import { cancelWithTerms, sendForApproval } from "@/lib/services/changes";
 import {
   advanceStage,
-  cancelOrder,
   finishVideoUpload,
   OrderError,
   postUpdate,
@@ -23,6 +24,7 @@ import {
   MAX_PHOTO_BYTES,
   newCatalogueItemSchema,
   peakDateSchema,
+  seasonalBoxSchema,
   settingsSchema,
 } from "@/lib/validation";
 
@@ -55,7 +57,7 @@ export async function advanceStageAction(orderId: string): Promise<ActionResult>
 export async function cancelOrderAction(orderId: string): Promise<ActionResult> {
   await requireAdmin();
   try {
-    await cancelOrder(await deps(), uuid.parse(orderId));
+    await cancelWithTerms(await deps(), uuid.parse(orderId), "emily");
     revalidatePath("/admin", "layout");
     return { ok: true };
   } catch (err) {
@@ -202,6 +204,119 @@ export async function removePeakAction(date: string): Promise<ActionResult> {
   try {
     await (await getRepo()).removePeakDate(peakDateSchema.shape.date.parse(date));
     revalidatePath("/admin/settings");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Phase 2 --------------------------------------------------------------------
+
+export async function sendForApprovalAction(form: FormData): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const orderId = uuid.parse(form.get("orderId"));
+    const note = z.string().max(500).parse(form.get("note") ?? "");
+    const file = form.get("sketch");
+    let sketch = null;
+    if (file instanceof File && file.size > 0) {
+      if (file.size > MAX_PHOTO_BYTES) return { ok: false, error: "Images must be under 4 MB." };
+      sketch = { bytes: new Uint8Array(await file.arrayBuffer()), contentType: file.type };
+    }
+    await sendForApproval(await deps(), orderId, note, sketch);
+    revalidatePath(`/admin/orders/${orderId}`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function toggleKitchenAction(kind: "cake" | "box", id: string, done: boolean): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    if (kind === "cake") await repo.updateOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    else await repo.updateBoxOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    revalidatePath("/admin/kitchen");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+const automationSchema = z.object({
+  key: z.enum(AUTOMATION_KEYS),
+  enabled: z.boolean(),
+  days: z.number().int().min(0).max(400),
+});
+
+export async function saveAutomationAction(input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await (await getRepo()).saveAutomation(automationSchema.parse(input));
+    revalidatePath("/admin/automations");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function removeWaitlistAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await (await getRepo()).setWaitlistStatus(uuid.parse(id), "removed");
+    revalidatePath("/admin/waitlist");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function saveBoxAction(id: string | null, input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const box = seasonalBoxSchema.parse(input);
+    if (id) {
+      const existing = await repo.getBox(uuid.parse(id));
+      if (!existing) return { ok: false, error: "That box no longer exists." };
+      if (box.cap < existing.sold) return { ok: false, error: `${existing.sold} are already sold, so the cap can't go below that.` };
+      await repo.updateBox(existing.id, box);
+    } else {
+      await repo.createBox({ ...box, id: randomUUID(), sold: 0, photoPath: null });
+    }
+    revalidatePath("/admin/boxes");
+    revalidatePath("/boxes");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function boxOrderAction(id: string, action: "collected" | "cancel"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const bo = await repo.getBoxOrderById(uuid.parse(id));
+    if (!bo) return { ok: false, error: "Pre-order not found." };
+    if (action === "collected") {
+      if (bo.status !== "paid") return { ok: false, error: "Only paid pre-orders can be marked collected." };
+      await repo.updateBoxOrder(bo.id, { status: "collected" });
+    } else if (!(await repo.cancelBoxOrder(bo.id, false))) {
+      return { ok: false, error: "This pre-order can't be cancelled." };
+    }
+    revalidatePath("/admin/boxes");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function voidVoucherAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await (await getRepo()).setVoucherStatus(uuid.parse(id), "void");
+    revalidatePath("/admin/vouchers");
     return { ok: true };
   } catch (err) {
     return fail(err);

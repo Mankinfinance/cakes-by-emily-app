@@ -28,6 +28,10 @@ interface Props {
   slot: string;
   onSelectDay: (d: DayInfo) => void;
   onSelectSlot: (s: string) => void;
+  /** Shown when a fully booked day is tapped. */
+  waitlist?: React.ReactNode;
+  onSelectFull?: (date: string) => void;
+  fullDate?: string | null;
 }
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -38,7 +42,7 @@ function shiftMonth(month: string, by: number): string {
   return d.toISOString().slice(0, 7);
 }
 
-export function Calendar({ today, settings, selected, slot, onSelectDay, onSelectSlot }: Props) {
+export function Calendar({ today, settings, selected, slot, onSelectDay, onSelectSlot, waitlist, onSelectFull, fullDate }: Props) {
   const [month, setMonth] = useState(today.slice(0, 7));
   const [days, setDays] = useState<DayInfo[] | null>(null);
   const [slotData, setSlotData] = useState<{ date: string; slots: SlotInfo[] } | null>(null);
@@ -103,13 +107,14 @@ export function Calendar({ today, settings, selected, slot, onSelectDay, onSelec
               <div key={`pad-${i}`} />
             ))}
             {days.map((d) => {
-              const isSel = selected?.date === d.date;
+              const isSel = selected?.date === d.date || fullDate === d.date;
+              const full = d.state === "full" && Boolean(onSelectFull);
               return (
                 <button
                   key={d.date}
                   type="button"
-                  disabled={!d.bookable}
-                  onClick={() => onSelectDay(d)}
+                  disabled={!d.bookable && !full}
+                  onClick={() => (full ? onSelectFull!(d.date) : onSelectDay(d))}
                   data-testid={`day-${d.date}`}
                   data-state={d.state}
                   aria-pressed={isSel}
@@ -121,10 +126,13 @@ export function Calendar({ today, settings, selected, slot, onSelectDay, onSelec
                         ? d.isRush
                           ? "border-gold/60 bg-[#fbf3e6] hover:border-gold"
                           : "border-line bg-white hover:border-rose"
-                        : "border-transparent text-muted/50 line-through"
+                        : full
+                          ? "border-dashed border-line bg-paper text-muted hover:border-rose"
+                          : "border-transparent text-muted/50 line-through"
                   }`}
                 >
                   <span>{Number(d.date.slice(8))}</span>
+                  {full && <span className="text-[9px] leading-none">full</span>}
                   {d.bookable && d.isRush && <span className="text-[9px] leading-none">rush</span>}
                   {d.bookable && d.peakSurchargeCents > 0 && <span className="text-[9px] leading-none">+{formatAud(d.peakSurchargeCents)}</span>}
                 </button>
@@ -135,9 +143,12 @@ export function Calendar({ today, settings, selected, slot, onSelectDay, onSelec
         <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
           <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded border border-line bg-white" /> Available</span>
           <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded border border-gold/60 bg-[#fbf3e6]" /> Rush (+{formatAud(settings.rushFeeCents)})</span>
+          {onSelectFull && <span className="flex items-center gap-1"><span className="inline-block h-3 w-3 rounded border border-dashed border-line bg-paper" /> Full: tap to join the waitlist</span>}
           <span className="flex items-center gap-1"><span className="line-through">12</span> Unavailable</span>
         </div>
       </div>
+
+      {fullDate && waitlist}
 
       {selected && (
         <div className="mt-5">

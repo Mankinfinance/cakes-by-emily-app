@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { memoryRepository as repo, resetMemoryStore } from "@/lib/data/memory";
 import { outbox, type Mailer } from "@/lib/services/email";
+import { cancelWithTerms } from "@/lib/services/changes";
+import { runScheduledMessages } from "@/lib/services/messages";
 import {
   advanceStage,
-  cancelOrder,
   createOrder,
   handlePaidSession,
   monthAvailability,
   OrderError,
   postUpdate,
-  runReminders,
   slotAvailability,
   startBalancePayment,
   startVideoUpload,
@@ -242,34 +242,34 @@ describe("Emily's actions", () => {
 
   it("cancelling frees the slot", async () => {
     const { order } = await createAndPay();
-    await cancelOrder(deps, order.id);
+    await cancelWithTerms(deps, order.id, "emily");
     const slots = await slotAvailability(repo, "2026-11-20", NOW);
     expect(slots.slots.find((s) => s.time === "10:00")?.remaining).toBe(2);
   });
 });
 
-describe("reminders", () => {
+describe("scheduled messages", () => {
   it("sends the balance reminder 4 days out and pickup details the day before, once each", async () => {
     const { order } = await createAndPay();
     sent.length = 0;
     const at = (iso: string) => ({ ...deps, now: new Date(iso) });
     // 16 Nov (4 days before 20 Nov), 9am Sydney
-    expect(await runReminders(at("2026-11-15T22:00:00Z"), "Pickup details")).toEqual({ balance: 1, pickup: 0 });
-    expect(await runReminders(at("2026-11-15T23:00:00Z"), "Pickup details")).toEqual({ balance: 0, pickup: 0 });
+    expect(await runScheduledMessages(at("2026-11-15T22:00:00Z"))).toMatchObject({ balance_reminder: 1, pickup_details: 0 });
+    expect(await runScheduledMessages(at("2026-11-15T23:00:00Z"))).toMatchObject({ balance_reminder: 0, pickup_details: 0 });
     // 19 Nov, the day before
-    expect(await runReminders(at("2026-11-18T22:00:00Z"), "Pickup details")).toEqual({ balance: 0, pickup: 1 });
+    expect(await runScheduledMessages(at("2026-11-18T22:00:00Z"))).toMatchObject({ balance_reminder: 0, pickup_details: 1 });
     expect(sent.map((s) => s.subject)).toEqual([
       "Balance due for your cake on Fri, 20 Nov 2026",
-      "Pickup tomorrow at 10am",
+      "Pickup details: Fri, 20 Nov 2026 at 10am",
     ]);
-    const after = (await repo.getOrderById(order.id))!;
-    expect(after.remindersSent.sort()).toEqual(["balance", "pickup"]);
+    const keys = (await repo.listMessages(order.id)).map((m) => m.key).sort();
+    expect(keys).toEqual(["balance_reminder", "order_received", "pickup_details"]);
   });
 
   it("skips the balance reminder when paid in full", async () => {
     await createAndPay({ pickupDate: "2026-11-10" }); // rush, paid in full
-    const r = await runReminders({ ...deps, now: new Date("2026-11-07T22:00:00Z") }, "x");
-    expect(r.balance).toBe(0);
+    const r = await runScheduledMessages({ ...deps, now: new Date("2026-11-07T22:00:00Z") });
+    expect(r.balance_reminder).toBe(0);
   });
 });
 

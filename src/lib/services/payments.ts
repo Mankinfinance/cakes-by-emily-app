@@ -4,9 +4,10 @@
 import Stripe from "stripe";
 
 export interface CheckoutRequest {
-  orderId: string;
+  /** The cake order, box order or voucher being paid for. */
+  targetId: string;
   reference: string;
-  kind: "deposit" | "balance";
+  kind: "deposit" | "balance" | "box" | "voucher";
   amountCents: number;
   description: string;
   customerEmail: string;
@@ -46,14 +47,14 @@ export const stripeGateway: PaymentsGateway = {
             },
           },
         ],
-        metadata: { orderId: req.orderId, kind: req.kind, reference: req.reference },
-        payment_intent_data: { metadata: { orderId: req.orderId, kind: req.kind, reference: req.reference } },
+        metadata: { targetId: req.targetId, kind: req.kind, reference: req.reference },
+        payment_intent_data: { metadata: { targetId: req.targetId, kind: req.kind, reference: req.reference } },
         success_url: req.successUrl,
         cancel_url: req.cancelUrl,
         // Stripe's minimum. Matches the 30 minute slot hold.
         expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
       },
-      { idempotencyKey: `${req.orderId}-${req.kind}-${req.amountCents}-${Math.floor(Date.now() / 60000)}` },
+      { idempotencyKey: `${req.targetId}-${req.kind}-${req.amountCents}-${Math.floor(Date.now() / 60000)}` },
     );
     if (!session.url) throw new Error("Stripe did not return a checkout URL.");
     return { id: session.id, url: session.url };

@@ -53,15 +53,22 @@ describe("database migration", () => {
     const tables = res.rows.map((r) => r.relname);
     expect(tables).toEqual([
       "admins",
+      "automations",
+      "box_orders",
       "catalogue_items",
       "days_off",
+      "message_log",
       "order_items",
       "order_updates",
       "orders",
       "payments",
       "peak_dates",
+      "seasonal_boxes",
       "settings",
       "stripe_events",
+      "voucher_redemptions",
+      "vouchers",
+      "waitlist",
     ]);
     expect(res.rows.every((r) => r.relrowsecurity)).toBe(true);
   });
@@ -127,5 +134,131 @@ describe("database migration", () => {
     await expect(
       db.query(`insert into catalogue_items (id, category, name) values ('bad2', 'nonsense', 'Bad')`),
     ).rejects.toThrow();
+  });
+});
+
+describe("phase 2 migration", () => {
+  const BOX = "b0000000-0000-4000-8000-000000000001";
+
+  async function insertVoucher(id: string, hash: string, balance: number, expires = "2027-12-31", status = "active") {
+    await db.query(
+      `insert into vouchers (id, kind, code_hash, code_last4, amount_cents, balance_cents, status, buyer_email, expires_on)
+       values ($1, 'gift', $2, 'WXYZ', $3, $3, $4, 'kim@example.com', $5)`,
+      [id, hash, balance, status, expires],
+    );
+  }
+
+  it("seeds default automations and the sample boxes", async () => {
+    const a = await db.query<{ n: number }>("select count(*)::int as n from automations");
+    expect(a.rows[0].n).toBe(6);
+    const b = await db.query<{ n: number }>("select count(*)::int as n from seasonal_boxes");
+    expect(b.rows[0].n).toBe(3);
+  });
+
+  it("blocks customers (anon) from every new table", async () => {
+    await db.exec("set role anon");
+    for (const t of ["automations", "message_log", "waitlist", "seasonal_boxes", "box_orders", "vouchers", "voucher_redemptions"]) {
+      const res = await db.query(`select * from ${t}`);
+      expect(res.rows, t).toHaveLength(0);
+    }
+    await db.exec("reset role");
+  });
+
+  it("never oversells a box, even with many buyers at once", async () => {
+    // PGlite runs one query at a time, so these are serialised; the function's
+    // guarded update (and the sold <= cap check constraint) is what keeps it
+    // safe under real concurrency on Supabase, where the row lock applies.
+    await db.query("update seasonal_boxes set cap = 5, sold = 0 where id = $1", [BOX]);
+    const attempts = await Promise.all(
+      Array.from({ length: 12 }, () => db.query<{ ok: boolean }>("select reserve_box_stock($1, 1, '2026-11-08') as ok", [BOX])),
+    );
+    expect(attempts.filter((r) => r.rows[0].ok)).toHaveLength(5);
+    const sold = await db.query<{ sold: number }>("select sold from seasonal_boxes where id = $1", [BOX]);
+    expect(sold.rows[0].sold).toBe(5);
+    await expect(db.query("update seasonal_boxes set sold = 6 where id = $1", [BOX])).rejects.toThrow();
+    // Not open yet, or closed: refused.
+    expect((await db.query<{ ok: boolean }>("select reserve_box_stock($1, 1, '2026-10-01') as ok", [BOX])).rows[0].ok).toBe(false);
+  });
+
+  it("cancelling a box order puts the stock back once", async () => {
+    await db.query("update seasonal_boxes set cap = 10, sold = 2 where id = $1", [BOX]);
+    await db.query(
+      `insert into box_orders (id, reference, token_hash, box_id, box_name, quantity, unit_price_cents, total_cents, customer_name, email, phone, pickup_date, pickup_slot)
+       values ('44444444-4444-4444-4444-444444444444', 'BOX-AAAAA', 'hash-box', $1, 'Christmas', 2, 4500, 9000, 'Kim', 'kim@example.com', '0400000000', '2026-12-20', '10:00')`,
+      [BOX],
+    );
+    const cancel = async () => (await db.query<{ ok: boolean }>("select cancel_box_order('44444444-4444-4444-4444-444444444444', true) as ok")).rows[0].ok;
+    expect(await cancel()).toBe(true);
+    expect(await cancel()).toBe(false);
+    expect((await db.query<{ sold: number }>("select sold from seasonal_boxes where id = $1", [BOX])).rows[0].sold).toBe(0);
+  });
+
+  it("redeems a voucher partially, once per order, and gives it back once", async () => {
+    const order = "55555555-5555-5555-5555-555555555555";
+    await insertOrder(order, "hash-voucher-order");
+    await insertVoucher("66666666-6666-6666-6666-666666666666", "hash-code-1", 5000);
+    const redeem = async (max: number) => (await db.query<{ n: number }>("select redeem_voucher('hash-code-1', $1, $2, '2026-11-08') as n", [order, max])).rows[0].n;
+    expect(await redeem(3000)).toBe(3000);
+    expect(await redeem(3000)).toBe(0); // the order already used a voucher
+    const bal = async () => (await db.query<{ b: number }>("select balance_cents as b from vouchers where code_hash = 'hash-code-1'")).rows[0].b;
+    expect(await bal()).toBe(2000);
+    const back = await db.query<{ amount: number; to_voucher: boolean }>("select * from return_voucher($1, '2026-11-08')", [order]);
+    expect(back.rows[0]).toEqual({ amount: 3000, to_voucher: true });
+    expect(await bal()).toBe(5000);
+    const again = await db.query<{ amount: number }>("select * from return_voucher($1, '2026-11-08')", [order]);
+    expect(again.rows[0].amount).toBe(0);
+  });
+
+  it("refuses expired, unpaid and empty vouchers, and returns expired ones as new credit", async () => {
+    const order = "77777777-7777-7777-7777-777777777777";
+    await insertOrder(order, "hash-voucher-order-2");
+    await insertVoucher("88888888-8888-8888-8888-888888888888", "hash-old", 5000, "2026-01-01");
+    await insertVoucher("99999999-9999-9999-9999-999999999999", "hash-unpaid", 5000, "2027-12-31", "pending");
+    const try_ = async (hash: string) => (await db.query<{ n: number }>("select redeem_voucher($1, $2, 1000, '2026-11-08') as n", [hash, order])).rows[0].n;
+    expect(await try_("hash-old")).toBe(0);
+    expect(await try_("hash-unpaid")).toBe(0);
+    expect(await try_("hash-missing")).toBe(0);
+    // Use a valid one, then let it expire before the order is cancelled.
+    await insertVoucher("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "hash-soon", 4000, "2026-11-30");
+    expect(await try_("hash-soon")).toBe(1000);
+    const back = await db.query<{ amount: number; to_voucher: boolean }>("select * from return_voucher($1, '2026-12-05')", [order]);
+    expect(back.rows[0]).toEqual({ amount: 1000, to_voucher: false });
+  });
+
+  it("records box and voucher payments exactly once", async () => {
+    await insertVoucher("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "hash-pending", 2500, "2027-12-31", "pending");
+    await db.query(
+      `insert into payments (voucher_id, kind, amount_cents, stripe_session_id) values ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'voucher', 2500, 'cs_v1')`,
+    );
+    expect((await db.query<{ ok: boolean }>("select record_payment_once('evt_v1', 'cs_v1') as ok")).rows[0].ok).toBe(true);
+    expect((await db.query<{ ok: boolean }>("select record_payment_once('evt_v2', 'cs_v1') as ok")).rows[0].ok).toBe(false);
+    const v = await db.query<{ status: string; balance_cents: number }>("select status, balance_cents from vouchers where id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'");
+    expect(v.rows[0]).toEqual({ status: "active", balance_cents: 2500 });
+    // A payment must point at exactly one thing.
+    await expect(db.query(`insert into payments (kind, amount_cents, stripe_session_id) values ('box', 100, 'cs_none')`)).rejects.toThrow();
+  });
+
+  it("allows only one live waitlist offer per date and one message per order and key", async () => {
+    const add = (id: string) =>
+      db.query(
+        `insert into waitlist (id, date, customer_name, email, phone, config) values ($1, '2026-12-05', 'Ann Lee', 'ann@example.com', '0400000000', '{}')`,
+        [id],
+      );
+    await add("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    await add("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    await db.query("update waitlist set status = 'offered' where id = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'");
+    await expect(db.query("update waitlist set status = 'offered' where id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'")).rejects.toThrow();
+    const order = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    await insertOrder(order, "hash-msg");
+    await db.query("insert into message_log (order_id, key) values ($1, 'thank_you')", [order]);
+    await expect(db.query("insert into message_log (order_id, key) values ($1, 'thank_you')", [order])).rejects.toThrow();
+  });
+
+  it("accepts the new stage and update kinds", async () => {
+    const order = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+    await insertOrder(order, "hash-stage");
+    await db.query("update orders set stage = 'awaiting_approval' where id = $1", [order]);
+    await db.query("insert into order_updates (order_id, kind) values ($1, 'sketch')", [order]);
+    await expect(db.query("update orders set stage = 'nonsense' where id = $1", [order])).rejects.toThrow();
   });
 });
