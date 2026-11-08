@@ -42,10 +42,10 @@ export async function guestFromTokens(deps: Pick<LightDeps, "repo">, shareToken:
 }
 
 async function holdAndCheckout(deps: Deps, r: PrivateRequest, guests: PrivateGuest[], email: string, successUrl: string, cancelUrl: string): Promise<string> {
-  const now = nowOf(deps);
   if (guests.length === 0) throw new OrderError("There's nothing left to pay.");
   const key = randomUUID();
-  const until = new Date(now.getTime() + PAYMENT_HOLD_MINUTES * 60_000).toISOString();
+  // Holds run on the real clock (like the database's now()), matching the checkout's own expiry.
+  const until = new Date(Date.now() + PAYMENT_HOLD_MINUTES * 60_000).toISOString();
   if (!(await deps.repo.holdShares(guests.map((g) => g.id), key, until))) {
     throw new OrderError("Someone is paying for this share right now, or it's already paid. Please try again in a few minutes.", 409);
   }
@@ -106,7 +106,7 @@ export async function payRemainingShares(deps: Deps, request: PrivateRequest, or
   const guests = await deps.repo.listGuests(request.id);
   const due = shareDueDate(request, settings.splitDueDays);
   if (!organiserCanPayRest(today, due, splitProgress(guests))) throw new OrderError("You can pay the remaining shares from the due date.");
-  const open = guests.filter((g) => holdable(g, now.toISOString()));
+  const open = guests.filter((g) => holdable(g, new Date().toISOString()));
   return holdAndCheckout(deps, request, open, request.email, `${organiserUrl}?paid=1`, organiserUrl);
 }
 

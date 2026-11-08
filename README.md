@@ -2,13 +2,14 @@
 
 A mobile-first website where customers design a custom cake, see the price as they go, pick a date and a 30 minute pickup time, and pay a deposit through Stripe. Emily runs everything from a private admin area: orders, progress updates with photos and videos, prices, what's shown on the menu, capacity, days off and peak dates.
 
-This covers **phases 1 to 3** of the plan:
+This covers **phases 1 to 4** of the plan:
 
 1. Ordering and payments.
 2. The time-savers (automatic messages, design approval, a waitlist, a kitchen sheet, change or cancel under Emily's terms), seasonal boxes and gift vouchers.
 3. Corporate packages, reviews, referrals and a stamp card, party add-ons, a sales snapshot, and Cake and Sip classes with private group bookings.
+4. Split payments and guest details for private classes, class photo galleries, a 3-class pass, vouchers on everything, customers cancelling their own class bookings, and optional automatic Stripe refunds.
 
-What's left for a later phase is listed under [Future work](#future-work-phase-4).
+What's left is listed under [Future work](#future-work).
 
 > **All prices in this code are samples** copied from the concept demo. Emily sets her real prices in the admin before launch.
 
@@ -74,6 +75,9 @@ What's left for a later phase is listed under [Future work](#future-work-phase-4
 - **Referrals** are checked by email (no self-referral, one referral per new customer) with a database rule backing it up, and the referrer's credit is issued exactly once.
 - **Corporate logos** are limited to PNG, JPG and WebP. SVG files can carry scripts, so they are refused.
 - **Reviews** only ever show a first name and initial, and the database refuses to publish one without the customer's consent.
+- **Guest details** (allergies, dietary needs) are only shown to Emily. The organiser sees names and payment status only.
+- **Share links, guest pages, organiser pages and gallery links** are built from the secret, and only their fingerprints are stored. Class pass codes are made the same way as voucher codes (hash and last 4 characters stored).
+- **Shares, pass credits and stamp card rewards** are each claimed in one database step, so nothing can be paid or used twice.
 - Only the details an order needs are collected. Marketing emails are opt-in.
 - Draft **privacy policy** (`/privacy`) and **terms** (`/terms`) pages are included, with [placeholders] for Emily's real wording. Have them checked before launch.
 
@@ -117,9 +121,9 @@ Open http://localhost:3000. This **test mode** keeps everything in memory (it di
 
 1. Create the account and complete the business details (ABN, bank account).
 2. Stay in **test mode** to begin with. Copy the secret key (`sk_test_...`).
-3. Developers, Webhooks, add an endpoint: `https://YOUR-DOMAIN/api/stripe/webhook`, listening to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Copy its signing secret (`whsec_...`).
+3. Developers, Webhooks, add an endpoint: `https://YOUR-DOMAIN/api/stripe/webhook`, listening to `checkout.session.completed`, `checkout.session.async_payment_succeeded` and `charge.refunded`. Copy its signing secret (`whsec_...`).
 4. To test locally, the [Stripe CLI](https://stripe.com/docs/stripe-cli) can forward webhooks: `stripe listen --forward-to localhost:3000/api/stripe/webhook`.
-5. Refunds are made in the Stripe dashboard.
+5. Refunds are made in the Stripe dashboard, unless Emily turns on automatic refunds (see Phase 4). Try those in test mode first.
 
 ### 4. Resend
 
@@ -166,17 +170,34 @@ From the plan doc, "Checks before taking real orders". These are things to confi
 - [ ] Original high-resolution photos for the home page.
 - [ ] ABN on the terms page and in Stripe.
 
-## Future work (phase 4)
+## Phase 4
+
+**Split payments and guest details (private classes and kids' parties).** Once the organiser pays the deposit, they're emailed a share link for their guests and a link to their own page. On the share link ("Join Jo's class: add your details and pay your share") each guest adds their name, email, allergies, dietary needs and whether they'd like emails, then pays their share: (total minus deposit) divided by the number of guests, with any odd cents on the first share. Each guest gets their own page to come back to. The organiser's page shows "4 of 8 paid" with names (never anyone's allergies), a reminder button (emails guests who added details but haven't paid; once a day), and from the due date (7 days before the class, a setting) a button to pay all remaining shares. Each share is held while someone is at checkout, so two people can't pay the same share. Emily sees every guest's details and payment status on `/admin/classes/private`, with "details missing" flags.
+
+**Class photo galleries.** On each class's admin page Emily uploads photos (stored privately), deletes any she doesn't want, and emails the gallery link to everyone booked (once per booking). The gallery has a grid, a full-screen viewer, Download, and Share (the phone's share sheet where it's supported, otherwise a download), with the caption tag @_cakes_by_emily_. The link only works with the class's own token.
+
+**3-class pass** (`/classes/pass`). $255 for 3 class seats, valid 12 months (all settings, prices are samples). The code is emailed after payment and entered when booking: each seat uses one credit, taken in one database step. Credits come back if Emily cancels, or if the customer cancels outside the no-refund window. An expired pass gets 90 more days when credits come back to it.
+
+**Vouchers everywhere.** Gift vouchers and credit codes now work on class bookings, seasonal boxes and corporate orders too, with the same rules as cake orders: used in one database step, partial balances kept, and given back as credit on cancellation. On corporate orders the voucher comes off the deposit first.
+
+**Customers cancel class bookings** from their ticket page, under the class terms (settings): 7 or more days before, a full refund; 3 to 6 days, what they paid becomes a credit code; under 3 days, nothing back and pass credits aren't returned. Any voucher used always comes back. Their seats go straight to the class waitlist.
+
+**Automatic refunds (`autoRefunds`, off by default).** With it off, nothing changes: each cancellation records the amount, and Emily refunds it by hand in the Stripe dashboard. With it on, the refund the terms allow is sent to Stripe straight away, split across the payments it came from (newest first: a balance before a deposit, several guests' shares), with an idempotency key on each so a retry never refunds twice. The refund ids are kept with the order. Admin cancel buttons show the amount ("Cancel booking and refund $95 via Stripe") and ask to confirm. If Stripe refuses any part, that part is recorded for a manual refund and Emily gets an email. Stripe's `charge.refunded` webhook keeps each payment's refunded total up to date, including refunds made in the dashboard.
+
+> **Before turning on automatic refunds, try them in Stripe test mode.** Place a test order, cancel it from the admin, and check the refund appears in the Stripe dashboard. Add `charge.refunded` to the webhook endpoint's events (see Stripe setup).
+
+**Stamp card.** Rewards are now claimed in one database step, so two orders placed at the same moment can't both use the same reward. A reward used on a cancelled order can be used again. Stamp cards and referrals are keyed by **email address** (always stored in lower case): the same person using two email addresses has two cards, and someone sharing an address with a partner shares the card.
+
+**New settings** (in `/admin/settings`): class full refund days (7), class credit days (3), shares due days before a private class (7), sell class passes (on), pass price ($255), classes per pass (3), pass valid months (12), and automatic refunds (off).
+
+## Future work
 
 Not built yet, on purpose:
 
-- **Split payments for private groups**: each guest pays their share from a link.
-- **Guest invite link**: the organiser shares one link and each guest adds their own name and allergies.
-- **Class photo gallery**: Emily uploads class photos and guests download and share them.
-- **3-class pass**: buy three classes up front at a discount.
-- Gift vouchers and credit codes on classes, seasonal boxes and corporate orders (today they work on cake orders).
-- Customer-initiated cancellation for class bookings (today Emily cancels them from the admin, with the refund recorded).
-- Automated Stripe refunds (today every refund is made by hand in the Stripe dashboard, as the order shows).
+- Guests editing their details after saving them (today they message Emily).
+- Pass and voucher codes on private class shares.
+- Partial cancellation (fewer seats) of a class booking.
+- Automatic refunds for late payments that arrive after an order has expired (Emily is emailed to refund them by hand).
 
 ## For developers
 
@@ -196,4 +217,4 @@ npm run build       # production build
 - `supabase/migrations`: the database schema, Row Level Security, and the functions that must be exact: recording a payment once, taking box stock, and using or giving back voucher balance. Add changes as **new** files; never edit one that may already have been run.
 - The business name lives in `src/lib/config.ts` if Emily picks a different brand.
 
-**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, voucher redemption and returns, referral rules, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout. **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).
+**What the automated tests cover, and what they don't.** Unit tests run the real pricing, calendar, terms, waitlist, voucher and order code, the real SQL migrations on PGlite (including the Row Level Security checks, box stock, class seats, guest places and share holds, pass credits, voucher redemption and returns on every kind of order, refund totals, stamp card claims, referral rules, and a check that the SQL sales summary matches the app's own calculation. PGlite runs one query at a time, so the "many buyers at once" test proves the logic and the database constraint rather than true parallel load), and the real Stripe webhook route with Stripe's own signature tools. End-to-end tests drive a production build in a real browser on the in-memory adapter with a pretend checkout (and pretend refunds). **Nothing has been tested against live Supabase, Stripe or Resend accounts yet.** Do that with test keys before launch (steps 2 to 6 above).

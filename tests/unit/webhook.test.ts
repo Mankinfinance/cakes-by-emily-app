@@ -126,6 +126,26 @@ describe("Stripe webhook route", () => {
     expect(v).toMatchObject({ status: "active", balanceCents: 5000 });
   });
 
+  it("stores the PaymentIntent and records charge.refunded once", async () => {
+    const paid = {
+      id: "evt_pi",
+      object: "event",
+      type: "checkout.session.completed",
+      data: { object: { id: "cs_test_abc", object: "checkout.session", payment_status: "paid", payment_intent: "pi_test_123" } },
+    };
+    expect((await POST(signedRequest(paid))).status).toBe(200);
+    const refunded = (id: string, amount: number) => ({
+      id,
+      object: "event",
+      type: "charge.refunded",
+      data: { object: { id: "ch_1", object: "charge", payment_intent: "pi_test_123", amount_refunded: amount } },
+    });
+    expect((await POST(signedRequest(refunded("evt_ref_1", 2500)))).status).toBe(200);
+    expect((await POST(signedRequest(refunded("evt_ref_1", 6500)))).status).toBe(200);
+    const [p] = await repo.listPaidPayments("order", orderId);
+    expect(p).toMatchObject({ stripePaymentIntent: "pi_test_123", refundedCents: 2500 });
+  });
+
   it("ignores unpaid sessions", async () => {
     await POST(signedRequest(event("evt_3", "cs_test_abc", "unpaid")));
     expect((await repo.getOrderById(orderId))?.amountPaidCents).toBe(0);
