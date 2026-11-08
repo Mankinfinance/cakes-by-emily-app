@@ -6,13 +6,14 @@ import { automationMap, dueScheduledMessages } from "../domain/automations";
 import { todayInBusinessTz } from "../domain/dates";
 import type { AutomationKey, Order } from "../domain/types";
 import { BUSINESS } from "../config";
-import { nowOf, orderLink, type LightDeps } from "./common";
+import { nowOf, orderLink, reviewLink, type LightDeps } from "./common";
 import {
   balanceReminderEmail,
   customerConfirmationEmail,
   pickupDetailsEmail,
   rebookReminderEmail,
   sendSafely,
+  standReturnEmail,
   stageEmail,
   thankYouEmail,
   type Email,
@@ -50,7 +51,7 @@ function reviewUrl(settingsUrl: string): string {
 export async function runScheduledMessages(deps: LightDeps): Promise<Record<string, number>> {
   const today = todayInBusinessTz(nowOf(deps));
   const [automations, orders, settings] = await Promise.all([deps.repo.listAutomations(), deps.repo.listOrders(), deps.repo.getSettings()]);
-  const counts: Record<string, number> = { balance_reminder: 0, pickup_details: 0, thank_you: 0, rebook_reminder: 0 };
+  const counts: Record<string, number> = { balance_reminder: 0, pickup_details: 0, thank_you: 0, rebook_reminder: 0, stand_return: 0 };
   for (const o of orders) {
     const sent = (await deps.repo.listMessages(o.id)).map((m) => m.key);
     for (const key of dueScheduledMessages(o, automations, sent, today)) {
@@ -61,8 +62,10 @@ export async function runScheduledMessages(deps: LightDeps): Promise<Record<stri
           : key === "pickup_details"
             ? pickupDetailsEmail(o, link, pickupDetailsText())
             : key === "thank_you"
-              ? thankYouEmail(o, link, reviewUrl(settings.reviewUrl))
-              : rebookReminderEmail(o, `${deps.baseUrl}/order`);
+              ? thankYouEmail(o, reviewLink(deps.baseUrl, o.id), reviewUrl(settings.reviewUrl))
+              : key === "stand_return"
+                ? standReturnEmail(o, link)
+                : rebookReminderEmail(o, `${deps.baseUrl}/order`);
       if (await sendOnce(deps, o.id, key, email)) counts[key]++;
     }
   }

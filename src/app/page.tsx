@@ -1,5 +1,7 @@
 import Link from "next/link";
+import { connection } from "next/server";
 import { CakePreview } from "@/components/CakePreview";
+import { getRepo } from "@/lib/data";
 import { SiteFooter, SiteHeader } from "@/components/SiteChrome";
 import { BUSINESS } from "@/lib/config";
 
@@ -10,7 +12,13 @@ const steps = [
   { title: "Watch it come to life", body: "Follow your cake's progress with updates and photos from Emily." },
 ];
 
-export default function Home() {
+export default async function Home() {
+  await connection();
+  const repo = await getRepo();
+  const [reviews, settings] = await Promise.all([repo.listReviews({ status: "approved" }), repo.getSettings()]);
+  const shown = reviews.filter((r) => r.consentToPublish).slice(0, 6);
+  const photos = await Promise.all(shown.map((r) => (r.photoPath ? repo.mediaUrl(r.photoPath) : Promise.resolve(null))));
+  const google = settings.reviewUrl || process.env.REVIEW_URL || "";
   return (
     <>
       <SiteHeader />
@@ -69,6 +77,45 @@ export default function Home() {
             <p className="mt-1 text-muted">Emailed instantly, and spent on any cake.</p>
           </Link>
         </section>
+
+        <section className="mx-auto grid max-w-5xl gap-6 px-4 pt-6 sm:grid-cols-2">
+          <Link href="/classes" className="card p-6 hover:border-rose" data-testid="home-classes">
+            <h2 className="font-serif text-2xl">Cake and Sip classes</h2>
+            <p className="mt-1 text-muted">Learn buttercream florals or drip cakes, BYO drinks. Kids&apos; classes and private parties too.</p>
+          </Link>
+          <Link href="/corporate" className="card p-6 hover:border-rose" data-testid="home-corporate">
+            <h2 className="font-serif text-2xl">Corporate orders</h2>
+            <p className="mt-1 text-muted">Logo cookies and cupcakes for your team or clients.</p>
+          </Link>
+        </section>
+
+        {shown.length > 0 && (
+          <section className="mx-auto max-w-5xl px-4 pt-14" data-testid="home-reviews">
+            <h2 className="font-serif text-3xl">Kind words</h2>
+            <ul className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {shown.map((r, i) => (
+                <li key={r.id} className="card overflow-hidden">
+                  {photos[i] && (
+                    // eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL
+                    <img src={photos[i]!} alt={`Cake reviewed by ${r.displayName}`} className="h-48 w-full object-cover" />
+                  )}
+                  <div className="p-5">
+                    <p className="text-gold" aria-label={`${r.rating} out of 5 stars`}>{"★".repeat(r.rating)}<span className="text-line">{"★".repeat(5 - r.rating)}</span></p>
+                    {r.text && <p className="mt-2 text-sm">&ldquo;{r.text}&rdquo;</p>}
+                    <p className="mt-2 text-sm font-semibold">{r.displayName}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {google && (
+              <p className="mt-4 text-sm">
+                <a href={google} className="underline" target="_blank" rel="noopener noreferrer">
+                  Read more reviews or leave one on Google
+                </a>
+              </p>
+            )}
+          </section>
+        )}
 
         <section className="mx-auto max-w-5xl px-4 py-14">
           <div className="card flex flex-col items-start gap-4 p-8 sm:flex-row sm:items-center sm:justify-between">

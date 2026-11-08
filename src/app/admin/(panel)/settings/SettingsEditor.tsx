@@ -147,6 +147,21 @@ export function SettingsEditor({ settings, daysOff, peaks }: { settings: Setting
             <input type="url" className="field" placeholder="https://..." value={s.reviewUrl} onChange={(e) => setS({ ...s, reviewUrl: e.target.value })} data-testid="review-url" />
           </label>
         </div>
+        <h3 className="mt-6 font-semibold">Classes</h3>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <label>
+            <span className="label">Group discount from (seats)</span>
+            <input type="number" min={2} className="field" {...num("groupDiscountMinSeats")} />
+          </label>
+          <label>
+            <span className="label">Group discount (%)</span>
+            <input type="number" min={0} max={50} className="field" {...num("groupDiscountPercent")} data-testid="group-discount" />
+          </label>
+          <label className="flex items-center gap-2 sm:col-span-2 lg:col-span-1">
+            <input type="checkbox" checked={s.classBlocksCakes} onChange={(e) => setS({ ...s, classBlocksCakes: e.target.checked })} data-testid="class-blocks" />
+            <span>No cake orders on class days</span>
+          </label>
+        </div>
         <label className="mt-4 block">
           <span className="label">Extra notes added to the terms (optional)</span>
           <textarea className="field" rows={3} value={s.cancellationPolicy} onChange={(e) => setS({ ...s, cancellationPolicy: e.target.value })} />

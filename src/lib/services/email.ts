@@ -7,7 +7,19 @@ import { formatDateLong, formatTime12 } from "../domain/dates";
 import { formatAud } from "../domain/money";
 import { balanceOwing } from "../domain/pricing";
 import { STAGE_MESSAGES, stageLabel } from "../domain/stages";
-import type { BoxOrder, CancellationRecord, Order, Stage, Voucher, WaitlistEntry } from "../domain/types";
+import type {
+  BoxOrder,
+  CancellationRecord,
+  ClassBooking,
+  ClassSession,
+  ClassType,
+  CorporateOrder,
+  Order,
+  PrivateRequest,
+  Stage,
+  Voucher,
+  WaitlistEntry,
+} from "../domain/types";
 
 export interface Email {
   to: string;
@@ -226,18 +238,17 @@ export function designApprovedAlertEmail(o: Order, adminLink: string, to: string
   };
 }
 
-export function thankYouEmail(o: Order, link: string, reviewUrl: string): Email {
+export function thankYouEmail(o: Order, reviewLink: string, googleUrl: string): Email {
   return {
     to: o.email,
     subject: `Thank you from ${BUSINESS.name}`,
     ...render(
       [
         `Hi ${firstName(o)}, thank you so much for choosing ${BUSINESS.name}! I hope everyone loved the cake.`,
-        reviewUrl
-          ? "If you have a minute, a quick review would mean the world to a small business like mine, and a photo of the cake at the party is always a bonus."
-          : "If you have a moment, I'd love to see a photo of the cake at the party. Tag @" + BUSINESS.instagram + " on Instagram.",
-      ],
-      reviewUrl ? { href: reviewUrl, label: "Leave a review" } : { href: link, label: "View your order" },
+        "If you have a minute, a quick review would mean the world to a small business like mine, and a photo of the cake at the party is always a bonus.",
+        googleUrl ? `You can also leave a Google review here: ${googleUrl}` : "",
+      ].filter(Boolean),
+      { href: reviewLink, label: "Leave a review" },
     ),
   };
 }
@@ -397,5 +408,218 @@ export function latePaymentAlertEmail(reference: string, amountCents: number, to
       `A payment of ${formatAud(amountCents)} arrived for ${reference} after it had expired and been cancelled.`,
       "ACTION: refund it in the Stripe dashboard, or contact the customer to re-book.",
     ]),
+  };
+}
+
+// Phase 3 templates ------------------------------------------------------
+
+export function standReturnEmail(o: Order, link: string): Email {
+  return {
+    to: o.email,
+    subject: "Reminder: please return the cake stand",
+    ...render(
+      [
+        `Hi ${firstName(o)}, I hope the celebration was wonderful! Just a reminder to drop the cake stand back to Grasmere so I can refund your bond.`,
+        "Reply to this email to arrange a time.",
+      ],
+      { href: link, label: "View your order" },
+    ),
+  };
+}
+
+const corpWhen = (c: CorporateOrder) => `${formatDateLong(c.pickupDate)} at ${formatTime12(c.pickupSlot)}`;
+
+export function corporateConfirmationEmail(c: CorporateOrder, link: string): Email {
+  return {
+    to: c.email,
+    subject: `Order ${c.reference} confirmed: ${c.packageName}`,
+    ...render(
+      [
+        `Hi ${c.contactName.split(" ")[0]}, thank you! Your order for ${c.companyName} is confirmed.`,
+        `${c.packageName}, pickup ${corpWhen(c)} in ${BUSINESS.suburb}.`,
+        `Paid so far: ${formatAud(c.amountPaidCents)} of ${formatAud(c.totalCents)}.`,
+      ],
+      { href: link, label: "View your order" },
+    ),
+  };
+}
+
+export function corporateAlertEmail(c: CorporateOrder, to: string): Email {
+  return {
+    to,
+    subject: `New corporate order ${c.reference}: ${c.packageName}`,
+    ...render([
+      `${c.companyName}${c.abn ? ` (ABN ${c.abn})` : ""}: ${c.contactName}, ${c.email}, ${c.phone}.`,
+      `${c.packageName}, pickup ${corpWhen(c)}.`,
+      c.logoPath ? "A logo was uploaded: see the order in admin." : "No logo uploaded.",
+      c.notes ? `Notes: ${c.notes}` : "",
+    ].filter(Boolean)),
+  };
+}
+
+export function referralRewardNote(referredName: string): string {
+  return `${referredName.split(" ")[0]} just placed their first order with your referral code. Thank you for spreading the word!`;
+}
+
+const sessionWhen = (s: ClassSession) => `${formatDateLong(s.date)} at ${formatTime12(s.startTime)}`;
+
+export function classTicketEmail(b: ClassBooking, s: ClassSession, t: ClassType, link: string): Email {
+  return {
+    to: b.email,
+    subject: `You're booked: ${t.name}, ${formatDateLong(s.date)}`,
+    ...render(
+      [
+        `Hi ${b.contactName.split(" ")[0]}, you're booked in! ${b.seats} ${b.seats === 1 ? "seat" : "seats"} for ${t.name} on ${sessionWhen(s)} in ${BUSINESS.suburb}.`,
+        t.isSip ? "Everything is supplied. Bring your drinks of choice (BYO, 18+)." : "Everything is supplied.",
+        "Your ticket and an \"add to calendar\" link are on your booking page.",
+      ],
+      { href: link, label: "View your ticket" },
+    ),
+  };
+}
+
+export function classAlertEmail(b: ClassBooking, s: ClassSession, t: ClassType, to: string): Email {
+  const allergies = b.guests.filter((g) => g.allergies).map((g) => `${g.name}: ${g.allergies}`);
+  return {
+    to,
+    subject: `Class booking ${b.reference}: ${b.seats} for ${t.name} ${formatDateLong(s.date)}`,
+    ...render([
+      `${b.contactName} (${b.email}, ${b.phone}) booked ${b.seats} for ${sessionWhen(s)}. Now ${s.booked} of ${s.seats} booked.`,
+      allergies.length ? `ALLERGIES: ${allergies.join("; ")}` : "No allergies noted.",
+    ]),
+  };
+}
+
+export function classReminderEmail(b: ClassBooking, s: ClassSession, t: ClassType, link: string, details: string): Email {
+  return {
+    to: b.email,
+    subject: `See you soon: ${t.name}`,
+    ...render(
+      [
+        `Hi ${b.contactName.split(" ")[0]}, your class is on ${sessionWhen(s)}. Please arrive 10 minutes early.`,
+        details,
+        t.isSip ? "Bring your drinks of choice (BYO) and a bag to carry your cake home." : "Bring a bag to carry your treats home.",
+      ],
+      { href: link, label: "View your ticket" },
+    ),
+  };
+}
+
+export function classThankYouEmail(b: ClassBooking, t: ClassType, googleUrl: string, orderUrl: string): Email {
+  return {
+    to: b.email,
+    subject: `Thanks for coming to ${t.name}!`,
+    ...render(
+      [
+        `Hi ${b.contactName.split(" ")[0]}, thank you for coming! I hope you had as much fun as I did.`,
+        googleUrl ? `If you have a minute, a Google review would mean the world: ${googleUrl}` : "Tag @" + BUSINESS.instagram + " in your photos!",
+        "Loved it? Order your next celebration cake any time.",
+      ],
+      { href: orderUrl, label: "Design a cake" },
+    ),
+  };
+}
+
+export function classCancelledEmail(b: ClassBooking, t: ClassType, s: ClassSession, r: CancellationRecord): Email {
+  return {
+    to: b.email,
+    subject: `Class cancelled: ${t.name}, ${formatDateLong(s.date)}`,
+    ...render([
+      `Hi ${b.contactName.split(" ")[0]}, I'm sorry, your booking for ${t.name} on ${sessionWhen(s)} has been cancelled.`,
+      r.summary,
+      r.refundCents > 0 ? `Your refund of ${formatAud(r.refundCents)} will be made to your card within a few business days.` : "",
+    ].filter(Boolean)),
+  };
+}
+
+export function classCancelledAlertEmail(t: ClassType, s: ClassSession, refunds: { reference: string; cents: number }[], to: string): Email {
+  return {
+    to,
+    subject: `Class cancelled: ${t.name} ${formatDateLong(s.date)}`,
+    ...render([
+      `${t.name} on ${sessionWhen(s)} was cancelled.`,
+      refunds.length ? `ACTION: refund in Stripe: ${refunds.map((r) => `${r.reference} ${formatAud(r.cents)}`).join(", ")}.` : "No refunds are due.",
+    ]),
+  };
+}
+
+export function classWaitlistOfferEmail(w: WaitlistEntry, t: ClassType, s: ClassSession, link: string, expiresAt: string): Email {
+  const until = new Intl.DateTimeFormat("en-AU", { dateStyle: "medium", timeStyle: "short", timeZone: "Australia/Sydney" }).format(new Date(expiresAt));
+  return {
+    to: w.email,
+    subject: `Seats opened: ${t.name}, ${formatDateLong(s.date)}`,
+    ...render(
+      [`Hi ${w.customerName.split(" ")[0]}, ${w.seats ?? 1} ${(w.seats ?? 1) === 1 ? "seat has" : "seats have"} opened up for ${t.name} on ${sessionWhen(s)}.`, `They're held for you until ${until}.`],
+      { href: link, label: "Claim your seats" },
+    ),
+  };
+}
+
+export function classWaitlistJoinedEmail(w: WaitlistEntry, t: ClassType, s: ClassSession, place: number): Email {
+  return {
+    to: w.email,
+    subject: `You're on the waitlist for ${t.name}`,
+    ...render([
+      `Hi ${w.customerName.split(" ")[0]}, you're number ${place} on the waitlist for ${t.name} on ${sessionWhen(s)}.`,
+      "If seats open up, I'll email you a link that holds them for 24 hours.",
+    ]),
+  };
+}
+
+export function privateReceivedEmail(r: PrivateRequest): Email {
+  return {
+    to: r.email,
+    subject: `Private class request ${r.reference} received`,
+    ...render([
+      `Hi ${r.contactName.split(" ")[0]}, thanks for your request for a ${r.packageName} private class for ${r.guests} on ${formatDateLong(r.preferredDate)}.`,
+      `The estimate is ${formatAud(r.estimateCents)}. Emily will check the date and reply soon. Nothing has been charged.`,
+    ]),
+  };
+}
+
+export function privateAlertEmail(r: PrivateRequest, adminLink: string, to: string): Email {
+  return {
+    to,
+    subject: `Private class request ${r.reference}: ${r.packageName} x ${r.guests}`,
+    ...render(
+      [
+        `${r.contactName} (${r.email}, ${r.phone}) asked for ${r.packageName} for ${r.guests} on ${formatDateLong(r.preferredDate)} at ${formatTime12(r.preferredTime)}.`,
+        r.occasion ? `Occasion: ${r.occasion}` : "",
+        r.notes ? `Notes: ${r.notes}` : "",
+      ].filter(Boolean),
+      { href: adminLink, label: "Accept or decline" },
+    ),
+  };
+}
+
+export function privateAcceptedEmail(r: PrivateRequest, payLink: string): Email {
+  return {
+    to: r.email,
+    subject: `Your private class is confirmed: pay the ${formatAud(r.depositCents)} deposit`,
+    ...render(
+      [
+        `Hi ${r.contactName.split(" ")[0]}, great news: ${formatDateLong(r.preferredDate)} at ${formatTime12(r.preferredTime)} works!`,
+        `Pay the ${formatAud(r.depositCents)} deposit to lock it in. The rest (estimate ${formatAud(r.estimateCents)} in total) is due before the class.`,
+      ],
+      { href: payLink, label: "Pay the deposit" },
+    ),
+  };
+}
+
+export function privateDeclinedEmail(r: PrivateRequest): Email {
+  return {
+    to: r.email,
+    subject: `About your private class request ${r.reference}`,
+    ...render([
+      `Hi ${r.contactName.split(" ")[0]}, I'm sorry, I can't do ${formatDateLong(r.preferredDate)}. Please reply with a couple of other dates and I'll do my best.`,
+    ]),
+  };
+}
+
+export function privatePaidEmail(r: PrivateRequest): Email {
+  return {
+    to: r.email,
+    subject: `Deposit received: private class ${r.reference}`,
+    ...render([`Hi ${r.contactName.split(" ")[0]}, thank you! Your private class on ${formatDateLong(r.preferredDate)} is locked in.`]),
   };
 }

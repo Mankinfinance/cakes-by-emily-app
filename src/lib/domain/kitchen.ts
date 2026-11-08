@@ -1,7 +1,7 @@
 // The kitchen sheet: what to make, in bake order, with allergies up front.
 
 import { addDays, weekStart } from "./dates";
-import { DIETARY_FILTERS, type BoxOrder, type Order } from "./types";
+import { DIETARY_FILTERS, type BoxOrder, type CorporateOrder, type Order } from "./types";
 
 export interface KitchenCake {
   kind: "cake";
@@ -32,7 +32,20 @@ export interface KitchenBox {
   done: boolean;
 }
 
-export type KitchenLine = KitchenCake | KitchenBox;
+export interface KitchenCorporate {
+  kind: "corporate";
+  id: string;
+  reference: string;
+  time: string;
+  customerFirstName: string;
+  company: string;
+  name: string;
+  hasLogo: boolean;
+  notes: string;
+  done: boolean;
+}
+
+export type KitchenLine = KitchenCake | KitchenBox | KitchenCorporate;
 
 export interface KitchenDay {
   date: string;
@@ -47,7 +60,7 @@ export function kitchenRange(view: "day" | "week", date: string): { from: string
 
 const named = (o: Order, cat: string) => o.items.filter((i) => i.category === cat).map((i) => i.name);
 
-export function kitchenSheet(orders: Order[], boxes: BoxOrder[], from: string, to: string): KitchenDay[] {
+export function kitchenSheet(orders: Order[], boxes: BoxOrder[], from: string, to: string, corporate: CorporateOrder[] = []): KitchenDay[] {
   const lines: (KitchenLine & { date: string })[] = [];
   for (const o of orders) {
     if (o.stage === "cancelled" || o.stage === "awaiting_payment") continue;
@@ -84,6 +97,23 @@ export function kitchenSheet(orders: Order[], boxes: BoxOrder[], from: string, t
       name: b.boxName,
       quantity: b.quantity,
       done: b.kitchenDone,
+    });
+  }
+  for (const c of corporate) {
+    if (c.status === "awaiting_payment" || c.status === "cancelled") continue;
+    if (c.pickupDate < from || c.pickupDate > to) continue;
+    lines.push({
+      kind: "corporate",
+      date: c.pickupDate,
+      id: c.id,
+      reference: c.reference,
+      time: c.pickupSlot,
+      customerFirstName: c.contactName.split(" ")[0],
+      company: c.companyName,
+      name: c.packageName,
+      hasLogo: Boolean(c.logoPath),
+      notes: c.notes,
+      done: c.kitchenDone,
     });
   }
   lines.sort((a, b) => (a.date + a.time + a.reference).localeCompare(b.date + b.time + b.reference));

@@ -11,6 +11,7 @@ import { canSetVisibility } from "@/lib/domain/visibility";
 import { getMailer } from "@/lib/services/email";
 import { AUTOMATION_KEYS } from "@/lib/domain/types";
 import { cancelWithTerms, sendForApproval } from "@/lib/services/changes";
+import { acceptPrivate, cancelBooking, cancelClass, createSeries, declinePrivate, previewSeries, setCheckIn } from "@/lib/services/classes";
 import {
   advanceStage,
   finishVideoUpload,
@@ -25,6 +26,7 @@ import {
   newCatalogueItemSchema,
   peakDateSchema,
   seasonalBoxSchema,
+  seriesSchema,
   settingsSchema,
 } from "@/lib/validation";
 
@@ -146,6 +148,7 @@ export async function addItemAction(input: unknown): Promise<ActionResult> {
       allergens: [],
       visible: false,
       sort: Math.max(0, ...all.map((i) => i.sort)) + 10,
+      bondCents: 0,
     });
     revalidatePath("/admin/catalogue");
     return { ok: true };
@@ -231,12 +234,13 @@ export async function sendForApprovalAction(form: FormData): Promise<ActionResul
   }
 }
 
-export async function toggleKitchenAction(kind: "cake" | "box", id: string, done: boolean): Promise<ActionResult> {
+export async function toggleKitchenAction(kind: "cake" | "box" | "corporate", id: string, done: boolean): Promise<ActionResult> {
   await requireAdmin();
   try {
     const repo = await getRepo();
     if (kind === "cake") await repo.updateOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
-    else await repo.updateBoxOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    else if (kind === "box") await repo.updateBoxOrder(uuid.parse(id), { kitchenDone: z.boolean().parse(done) });
+    else await repo.setCorporateKitchenDone(uuid.parse(id), z.boolean().parse(done));
     revalidatePath("/admin/kitchen");
     return { ok: true };
   } catch (err) {
@@ -317,6 +321,150 @@ export async function voidVoucherAction(id: string): Promise<ActionResult> {
   try {
     await (await getRepo()).setVoucherStatus(uuid.parse(id), "void");
     revalidatePath("/admin/vouchers");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+// Phase 3 ---------------------------------------------------------------------
+
+export async function updateCorporatePackageAction(id: string, input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const patch = z
+      .object({ name: z.string().trim().min(1).max(80).optional(), priceCents: z.number().int().min(0).max(1_000_000).optional(), visible: z.boolean().optional() })
+      .parse(input);
+    await (await getRepo()).updateCorporatePackage(z.string().regex(/^[a-z0-9-]{1,60}$/).parse(id), patch);
+    revalidatePath("/admin/corporate");
+    revalidatePath("/corporate");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function corporateStatusAction(id: string, action: "ready" | "collected" | "cancel"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const ok =
+      action === "ready"
+        ? await repo.setCorporateStatus(uuid.parse(id), "ready", ["confirmed"])
+        : action === "collected"
+          ? await repo.setCorporateStatus(uuid.parse(id), "collected", ["confirmed", "ready"])
+          : await repo.setCorporateStatus(uuid.parse(id), "cancelled", ["awaiting_payment", "confirmed", "ready"]);
+    if (!ok) return { ok: false, error: "That change isn't possible for this order now." };
+    revalidatePath("/admin/corporate");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function reviewStatusAction(id: string, status: "approved" | "hidden" | "pending"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const review = (await repo.listReviews()).find((r) => r.id === uuid.parse(id));
+    if (!review) return { ok: false, error: "Review not found." };
+    if (status === "approved" && !review.consentToPublish) return { ok: false, error: "This customer didn't agree to their review being published." };
+    await repo.setReviewStatus(review.id, status);
+    revalidatePath("/admin/reviews");
+    revalidatePath("/");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function updateClassTypeAction(id: string, input: unknown): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const patch = z
+      .object({ priceCents: z.number().int().min(0).max(100_000).optional(), visible: z.boolean().optional(), minGuests: z.number().int().min(1).max(50).optional() })
+      .parse(input);
+    await (await getRepo()).updateClassType(z.string().regex(/^[a-z0-9-]{1,60}$/).parse(id), patch);
+    revalidatePath("/admin/classes");
+    revalidatePath("/classes");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function seriesAction(input: unknown, create: boolean): Promise<ActionResult<{ dates: { date: string; skipped: boolean }[] }>> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const parsed = seriesSchema.parse(input);
+    const dates = await previewSeries(repo, parsed);
+    if (create) {
+      await createSeries({ repo }, parsed);
+      revalidatePath("/admin/classes");
+      revalidatePath("/classes");
+    }
+    return { ok: true, data: { dates } };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function sessionSeatsAction(id: string, seats: number): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    const repo = await getRepo();
+    const s = await repo.getSession(uuid.parse(id));
+    if (!s) return { ok: false, error: "Class not found." };
+    const n = z.number().int().min(1).max(50).parse(seats);
+    if (n < s.booked) return { ok: false, error: `${s.booked} seats are already booked.` };
+    await repo.updateSession(s.id, { seats: n });
+    revalidatePath(`/admin/classes/${s.id}`);
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelClassAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelClass(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function cancelBookingAction(id: string): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await cancelBooking(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function checkInAction(bookingId: string, guestIndex: number, checkedIn: boolean): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    await setCheckIn(await getRepo(), uuid.parse(bookingId), z.number().int().min(0).max(5).parse(guestIndex), z.boolean().parse(checkedIn));
+    revalidatePath("/admin/classes", "layout");
+    return { ok: true };
+  } catch (err) {
+    return fail(err);
+  }
+}
+
+export async function privateAction(id: string, action: "accept" | "decline"): Promise<ActionResult> {
+  await requireAdmin();
+  try {
+    if (action === "accept") await acceptPrivate(await deps(), uuid.parse(id));
+    else await declinePrivate(await deps(), uuid.parse(id));
+    revalidatePath("/admin/classes/private");
     return { ok: true };
   } catch (err) {
     return fail(err);

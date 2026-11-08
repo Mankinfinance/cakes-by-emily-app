@@ -74,6 +74,7 @@ export function Builder({ items, settings, today, cancelled }: Props) {
   const [code, setCode] = useState("");
   const [codeState, setCodeState] = useState<{ applied: string; balanceCents: number } | null>(null);
   const [codeMsg, setCodeMsg] = useState<string | null>(null);
+  const [referral, setReferral] = useState("");
   const topRef = useRef<HTMLDivElement>(null);
 
   // Restore a saved draft (for example after cancelling at checkout).
@@ -201,6 +202,7 @@ export function Builder({ items, settings, today, cancelled }: Props) {
           ...details,
           remindNextYear: isBirthday && details.remindNextYear,
           voucherCode: codeState?.applied ?? "",
+          referralCode: referral.trim(),
           acceptTerms,
         }),
       );
@@ -451,6 +453,40 @@ export function Builder({ items, settings, today, cancelled }: Props) {
                   Pickup: <strong>{formatDateLong(day.date)}</strong> at <strong>{formatTime12(slot)}</strong>
                 </p>
                 {config.topperText && config.decorations.includes("dec-topper") && <p className="mt-1 text-sm">Topper: {config.topperText}</p>}
+              </div>
+              {of("addon").length > 0 && (
+                <div className="card p-5 text-sm">
+                  <h3 className="font-semibold">Party add-ons</h3>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2" data-testid="addons">
+                    {of("addon").map((item) => {
+                      const on = (config.addons ?? []).includes(item.id);
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          aria-pressed={on}
+                          data-testid={`addon-${item.id}`}
+                          onClick={() => update({ addons: on ? (config.addons ?? []).filter((x) => x !== item.id) : [...(config.addons ?? []), item.id] })}
+                          className={`flex items-start justify-between gap-2 rounded-xl border p-3 text-left ${on ? "border-rose ring-2 ring-rose/20" : "border-line"}`}
+                        >
+                          <span>
+                            <span className="block font-semibold">{item.name}</span>
+                            {item.description && <span className="block text-xs text-muted">{item.description}</span>}
+                          </span>
+                          <span className="shrink-0 font-semibold">
+                            +{formatAud(item.priceCents)}
+                            {item.bondCents > 0 && <span className="block text-xs font-normal text-muted">+{formatAud(item.bondCents)} bond</span>}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="card p-5 text-sm">
+                <h3 className="font-semibold">Referral code</h3>
+                <p className="text-muted">First order? A friend&apos;s code takes money off. It&apos;s checked and taken off at checkout.</p>
+                <input className="field mt-2 max-w-xs uppercase" placeholder="NAME-XXXX" aria-label="Referral code" value={referral} onChange={(e) => setReferral(e.target.value)} data-testid="referral-input" />
               </div>
               <div className="card p-5 text-sm">
                 <h3 className="font-semibold">Gift voucher or credit code</h3>

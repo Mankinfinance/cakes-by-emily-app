@@ -13,8 +13,8 @@ export default async function KitchenPage({ searchParams }: PageProps<"/admin/ki
   const date = typeof sp.date === "string" && isIsoDate(sp.date) ? sp.date : today;
   const { from, to } = kitchenRange(view, date);
   const repo = await getRepo();
-  const [orders, boxes] = await Promise.all([repo.listOrders(), repo.listBoxOrders()]);
-  const days = kitchenSheet(orders, boxes, from, to);
+  const [orders, boxes, corporate] = await Promise.all([repo.listOrders(), repo.listBoxOrders(), repo.listCorporateOrders()]);
+  const days = kitchenSheet(orders, boxes, from, to, corporate);
   const step = view === "day" ? 1 : 7;
   const link = (d: string, v = view) => `/admin/kitchen?view=${v}&date=${d}`;
 
@@ -74,10 +74,18 @@ export default async function KitchenPage({ searchParams }: PageProps<"/admin/ki
                             </p>
                           )}
                         </>
-                      ) : (
+                      ) : l.kind === "box" ? (
                         <p>
                           {l.quantity} x {l.name}
                         </p>
+                      ) : (
+                        <>
+                          <p>
+                            Corporate: {l.name} for {l.company}
+                          </p>
+                          <p className="text-muted">{l.hasLogo ? "Logo uploaded (see the order in Corporate)" : "No logo uploaded"}</p>
+                          {l.notes && <p className="text-muted">Notes: {l.notes}</p>}
+                        </>
                       )}
                     </div>
                   </li>

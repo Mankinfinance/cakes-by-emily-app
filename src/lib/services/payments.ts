@@ -7,7 +7,7 @@ export interface CheckoutRequest {
   /** The cake order, box order or voucher being paid for. */
   targetId: string;
   reference: string;
-  kind: "deposit" | "balance" | "box" | "voucher";
+  kind: import("../domain/types").Payment["kind"];
   amountCents: number;
   description: string;
   customerEmail: string;

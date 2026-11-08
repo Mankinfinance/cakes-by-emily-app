@@ -11,6 +11,7 @@ import { balanceOwing } from "@/lib/domain/pricing";
 import { stageLabel } from "@/lib/domain/stages";
 import { termsCheck } from "@/lib/domain/terms";
 import { orderFromToken } from "@/lib/orders-public";
+import { referralCodeFor, stampCardFor } from "@/lib/services/referrals";
 import { ApprovalPanel } from "./ApprovalPanel";
 import { ChangeOrCancel } from "./ChangeOrCancel";
 import { PayBalanceButton } from "./PayBalanceButton";
@@ -42,6 +43,9 @@ export default async function OrderStatusPage({ params, searchParams }: PageProp
   const check = termsCheck(order, settings, daysBetween(today, order.pickupDate));
   const timeline = messageTimeline(order, automations, messages);
   const sketch = order.stage === "awaiting_approval" ? updates.find((u) => u.kind === "sketch") : undefined;
+  const paidUp = order.stage !== "awaiting_payment" && order.stage !== "cancelled";
+  const referral = paidUp && settings.referralsEnabled ? await referralCodeFor(repo, order.email, order.customerName) : null;
+  const stamps = paidUp && settings.stampsEnabled ? await stampCardFor(repo, settings, order.email) : null;
   const sketchUrl = sketch ? media[updates.indexOf(sketch)] : null;
 
   return (
@@ -162,6 +166,32 @@ export default async function OrderStatusPage({ params, searchParams }: PageProp
             </ul>
           )}
         </section>
+
+        {(referral || stamps) && (
+          <section className="card mt-6 grid gap-4 p-5 text-sm sm:grid-cols-2">
+            {referral && (
+              <div data-testid="referral">
+                <h2 className="font-serif text-xl">Give {formatAud(settings.referralGiveCents)}, get {formatAud(settings.referralGetCents)}</h2>
+                <p className="mt-1 text-muted">Share your code. Friends get {formatAud(settings.referralGiveCents)} off their first cake, and you get {formatAud(settings.referralGetCents)} credit when they order.</p>
+                <p className="mt-2 inline-block rounded-lg border-2 border-dashed border-gold px-3 py-1 font-mono text-lg font-bold" data-testid="referral-code">{referral}</p>
+              </div>
+            )}
+            {stamps && (
+              <div data-testid="stamp-card">
+                <h2 className="font-serif text-xl">Stamp card</h2>
+                <p className="mt-1 text-muted">Every {stamps.every}th cake earns {settings.stampRewardName}, free.</p>
+                <div className="mt-2 flex gap-1" aria-label={`${stamps.stamps} of ${stamps.every} stamps`}>
+                  {Array.from({ length: stamps.every }).map((_, i) => (
+                    <span key={i} className={`flex h-8 w-8 items-center justify-center rounded-full border-2 ${i < stamps.stamps ? "border-rose bg-rose text-white" : "border-line"}`}>
+                      {i < stamps.stamps ? "★" : ""}
+                    </span>
+                  ))}
+                </div>
+                {stamps.rewardsAvailable > 0 && <p className="mt-2 font-semibold text-rose" data-testid="reward-ready">A reward is ready: it&apos;s added to your next order automatically.</p>}
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="card mt-6 p-5 text-sm">
           <h2 className="font-serif text-xl">Messages you&apos;ll receive</h2>

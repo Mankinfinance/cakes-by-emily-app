@@ -67,6 +67,8 @@ beforeEach(async () => {
     dietary: [],
     remindNextYear: false,
     waitlistId: null,
+    referralCode: null,
+    stampReward: false,
   });
   await repo.createPayment({ orderId, boxOrderId: null, voucherId: null, kind: "deposit", amountCents: 6500, stripeSessionId: "cs_test_abc" });
 });

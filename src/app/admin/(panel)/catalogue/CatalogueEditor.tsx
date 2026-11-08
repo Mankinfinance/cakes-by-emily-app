@@ -13,6 +13,7 @@ const TITLES: Record<Category, string> = {
   colour: "Colours",
   decoration: "Decorations",
   extra: "Extras",
+  addon: "Party add-ons (offered at checkout)",
 };
 
 function toCents(dollars: string): number | null {
@@ -27,7 +28,9 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
   const [price, setPrice] = useState((item.priceCents / 100).toString());
   const [allergens, setAllergens] = useState<Allergen[]>(item.allergens);
   const [visible, setVisible] = useState(item.visible);
-  const dirty = name !== item.name || toCents(price) !== item.priceCents || allergens.join() !== item.allergens.join();
+  const [bond, setBond] = useState((item.bondCents / 100).toString());
+  const dirty =
+    name !== item.name || toCents(price) !== item.priceCents || allergens.join() !== item.allergens.join() || (item.category === "addon" && toCents(bond) !== item.bondCents);
 
   function save(patch: Record<string, unknown>) {
     start(async () => {
@@ -39,7 +42,7 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
   }
 
   return (
-    <li className={`grid gap-3 border-b border-line py-3 last:border-0 md:grid-cols-[1fr_120px_auto] md:items-start ${visible ? "" : "opacity-60"}`} data-testid={`item-${item.id}`}>
+    <li className={`grid gap-3 border-b border-line py-3 last:border-0 md:grid-cols-[1fr_auto_auto] md:items-start ${visible ? "" : "opacity-60"}`} data-testid={`item-${item.id}`}>
       <div className="min-w-0">
         <input className="field !py-2" value={name} onChange={(e) => setName(e.target.value)} aria-label={`Name for ${item.name}`} />
         <div className="mt-2 flex flex-wrap gap-1">
@@ -59,6 +62,12 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
       <label className="flex items-center gap-1">
         <span className="text-muted">$</span>
         <input className="field !py-2" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} aria-label={`Price for ${item.name}`} />
+        {item.category === "addon" && (
+          <>
+            <span className="ml-1 text-xs text-muted">bond</span>
+            <input className="field !w-20 !py-2" inputMode="decimal" value={bond} onChange={(e) => setBond(e.target.value)} aria-label={`Refundable bond for ${item.name}`} />
+          </>
+        )}
       </label>
       <div className="flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
@@ -79,7 +88,7 @@ function Row({ item, onError }: { item: CatalogueItem; onError: (msg: string | n
           type="button"
           className="btn btn-primary !px-4 !py-1.5 text-sm"
           disabled={!dirty || pending || toCents(price) === null}
-          onClick={() => save({ name, priceCents: toCents(price), allergens })}
+          onClick={() => save({ name, priceCents: toCents(price), allergens, ...(item.category === "addon" ? { bondCents: toCents(bond) ?? 0 } : {}) })}
         >
           Save
         </button>
@@ -111,7 +120,7 @@ export function CatalogueEditor({ items }: { items: CatalogueItem[] }) {
             </h2>
             <ul className="mt-2">
               {list.map((i) => (
-                <Row key={`${i.id}-${i.priceCents}-${i.name}-${i.allergens.join()}-${i.visible}`} item={i} onError={setError} />
+                <Row key={`${i.id}-${i.priceCents}-${i.name}-${i.allergens.join()}-${i.visible}-${i.bondCents}`} item={i} onError={setError} />
               ))}
             </ul>
           </section>

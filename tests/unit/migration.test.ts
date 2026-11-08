@@ -54,8 +54,14 @@ describe("database migration", () => {
     expect(tables).toEqual([
       "admins",
       "automations",
+      "booking_message_log",
       "box_orders",
       "catalogue_items",
+      "class_bookings",
+      "class_sessions",
+      "class_types",
+      "corporate_orders",
+      "corporate_packages",
       "days_off",
       "message_log",
       "order_items",
@@ -63,6 +69,10 @@ describe("database migration", () => {
       "orders",
       "payments",
       "peak_dates",
+      "private_requests",
+      "referral_codes",
+      "referrals",
+      "reviews",
       "seasonal_boxes",
       "settings",
       "stripe_events",
@@ -150,7 +160,7 @@ describe("phase 2 migration", () => {
 
   it("seeds default automations and the sample boxes", async () => {
     const a = await db.query<{ n: number }>("select count(*)::int as n from automations");
-    expect(a.rows[0].n).toBe(6);
+    expect(a.rows[0].n).toBe(9);
     const b = await db.query<{ n: number }>("select count(*)::int as n from seasonal_boxes");
     expect(b.rows[0].n).toBe(3);
   });
@@ -260,5 +270,159 @@ describe("phase 2 migration", () => {
     await db.query("update orders set stage = 'awaiting_approval' where id = $1", [order]);
     await db.query("insert into order_updates (order_id, kind) values ($1, 'sketch')", [order]);
     await expect(db.query("update orders set stage = 'nonsense' where id = $1", [order])).rejects.toThrow();
+  });
+});
+
+describe("phase 3 migration", () => {
+  const T = "class-florals";
+
+  async function insertSession(id: string, seats = 8) {
+    await db.query("insert into class_sessions (id, class_type_id, date, start_time, seats) values ($1, $2, '2026-12-05', '14:00', $3)", [id, T, seats]);
+  }
+
+  it("seeds corporate packages, class types, add-ons and the new automations", async () => {
+    const n = async (sql: string) => (await db.query<{ n: number }>(sql)).rows[0].n;
+    expect(await n("select count(*)::int as n from corporate_packages")).toBe(6);
+    expect(await n("select count(*)::int as n from class_types")).toBe(3);
+    expect(await n("select count(*)::int as n from catalogue_items where category = 'addon'")).toBe(4);
+    expect(await n("select bond_cents as n from catalogue_items where id = 'add-stand-hire'")).toBe(2000);
+    expect(await n("select count(*)::int as n from automations where key in ('stand_return','class_reminder','class_thank_you')")).toBe(3);
+  });
+
+  it("blocks customers (anon) from every new table", async () => {
+    await db.exec("set role anon");
+    for (const t of ["corporate_packages", "corporate_orders", "reviews", "referral_codes", "referrals", "class_types", "class_sessions", "class_bookings", "booking_message_log", "private_requests"]) {
+      const res = await db.query(`select * from ${t}`);
+      expect(res.rows, t).toHaveLength(0);
+    }
+    await db.exec("reset role");
+  });
+
+  it("never overbooks a class, even with many bookers at once", async () => {
+    // As with boxes: PGlite serialises these, so this proves the guarded update
+    // and the booked <= seats constraint; on Supabase the row lock applies.
+    const id = "10000000-0000-4000-8000-000000000001";
+    await insertSession(id, 8);
+    const attempts = await Promise.all(
+      Array.from({ length: 10 }, () => db.query<{ ok: boolean }>("select reserve_class_seats($1, 3) as ok", [id])),
+    );
+    expect(attempts.filter((r) => r.rows[0].ok)).toHaveLength(2);
+    expect((await db.query<{ booked: number }>("select booked from class_sessions where id = $1", [id])).rows[0].booked).toBe(6);
+    await expect(db.query("update class_sessions set booked = 9 where id = $1", [id])).rejects.toThrow();
+    await db.query("update class_sessions set status = 'cancelled' where id = $1", [id]);
+    expect((await db.query<{ ok: boolean }>("select reserve_class_seats($1, 1) as ok", [id])).rows[0].ok).toBe(false);
+  });
+
+  it("cancels a class booking once and gives the seats back", async () => {
+    const s = "10000000-0000-4000-8000-000000000002";
+    const b = "20000000-0000-4000-8000-000000000001";
+    await insertSession(s, 8);
+    await db.query("select reserve_class_seats($1, 2)", [s]);
+    await db.query(
+      `insert into class_bookings (id, reference, token_hash, session_id, seats, guests, contact_name, email, phone, unit_price_cents, total_cents, terms_accepted_at)
+       values ($1, 'CLS-AAAAA', 'hash-cls', $2, 2, '[]', 'Ann', 'ann@example.com', '0400000000', 9500, 19000, now())`,
+      [b, s],
+    );
+    const cancel = async () => (await db.query<{ ok: boolean }>(`select cancel_class_booking($1, false, '{"by":"emily"}') as ok`, [b])).rows[0].ok;
+    expect(await cancel()).toBe(true);
+    expect(await cancel()).toBe(false);
+    expect((await db.query<{ booked: number }>("select booked from class_sessions where id = $1", [s])).rows[0].booked).toBe(0);
+  });
+
+  it("only publishes reviews with consent, one per order", async () => {
+    const order = "30000000-0000-4000-8000-000000000001";
+    await insertOrder(order, "hash-review");
+    await db.query("insert into reviews (order_id, rating, display_name, consent_to_publish) values ($1, 5, 'Sam T.', false)", [order]);
+    await expect(db.query("update reviews set status = 'approved' where order_id = $1", [order])).rejects.toThrow();
+    await expect(db.query("insert into reviews (order_id, rating, display_name) values ($1, 4, 'Sam T.')", [order])).rejects.toThrow();
+    await expect(db.query("insert into reviews (order_id, rating, display_name) values ($1, 6, 'X')", ["30000000-0000-4000-8000-000000000009"])).rejects.toThrow();
+  });
+
+  it("refuses self-referrals and referring the same customer twice", async () => {
+    await db.query("insert into referral_codes (code, email) values ('KIM-ABCD', 'kim@example.com')");
+    const o1 = "41000000-0000-4000-8000-000000000001";
+    const o2 = "42000000-0000-4000-8000-000000000002";
+    await insertOrder(o1, "hash-ref-1");
+    await insertOrder(o2, "hash-ref-2");
+    await expect(
+      db.query("insert into referrals (code, referrer_email, referred_email, order_id) values ('KIM-ABCD', 'kim@example.com', 'KIM@example.com', $1)", [o1]),
+    ).rejects.toThrow();
+    await db.query("insert into referrals (code, referrer_email, referred_email, order_id) values ('KIM-ABCD', 'kim@example.com', 'sam@example.com', $1)", [o1]);
+    await expect(
+      db.query("insert into referrals (code, referrer_email, referred_email, order_id) values ('KIM-ABCD', 'kim@example.com', 'Sam@Example.com', $1)", [o2]),
+    ).rejects.toThrow();
+    // Once the first is void (never paid), the customer can be referred again.
+    await db.query("update referrals set status = 'void' where order_id = $1", [o1]);
+    await db.query("insert into referrals (code, referrer_email, referred_email, order_id) values ('KIM-ABCD', 'kim@example.com', 'sam@example.com', $1)", [o2]);
+  });
+
+  it("records corporate, class and private deposit payments exactly once", async () => {
+    await db.query(
+      `insert into corporate_orders (id, reference, token_hash, package_id, package_name, quantity, total_cents, deposit_cents, company_name, contact_name, email, phone, pickup_date, pickup_slot, terms_accepted_at)
+       values ('50000000-0000-4000-8000-000000000001', 'CORP-AAAAA', 'hash-corp', 'corp-cookies-24', 'Logo cookies x 24', 24, 18000, 9000, 'Acme', 'Pat', 'p@example.com', '0400000000', '2026-12-01', '10:00', now())`,
+    );
+    await db.query(
+      `insert into payments (corporate_order_id, kind, amount_cents, stripe_session_id) values ('50000000-0000-4000-8000-000000000001', 'corporate_deposit', 9000, 'cs_corp')`,
+    );
+    const pay = async (evt: string, cs: string) => (await db.query<{ ok: boolean }>("select record_payment_once($1, $2) as ok", [evt, cs])).rows[0].ok;
+    expect(await pay("evt_corp", "cs_corp")).toBe(true);
+    expect(await pay("evt_corp2", "cs_corp")).toBe(false);
+    const c = await db.query<{ status: string; amount_paid_cents: number }>("select status, amount_paid_cents from corporate_orders where reference = 'CORP-AAAAA'");
+    expect(c.rows[0]).toEqual({ status: "confirmed", amount_paid_cents: 9000 });
+
+    await db.query(
+      `insert into private_requests (id, reference, package_key, package_name, guests, per_person_cents, deposit_cents, estimate_cents, preferred_date, preferred_time, contact_name, email, phone, status)
+       values ('60000000-0000-4000-8000-000000000001', 'PVT-AAAAA', 'classic', 'Classic', 8, 9000, 15000, 72000, '2026-12-12', '14:00', 'Jo', 'jo@example.com', '0400000000', 'accepted')`,
+    );
+    await db.query(`insert into payments (private_request_id, kind, amount_cents, stripe_session_id) values ('60000000-0000-4000-8000-000000000001', 'private_deposit', 15000, 'cs_pvt')`);
+    expect(await pay("evt_pvt", "cs_pvt")).toBe(true);
+    expect((await db.query<{ status: string }>("select status from private_requests where reference = 'PVT-AAAAA'")).rows[0].status).toBe("paid");
+  });
+
+  it("works out the sales summary in SQL the same way as the app does", async () => {
+    const { summarise } = await import("@/lib/domain/snapshot");
+    // Fresh orders in March 2027, booked at different Sydney times.
+    const rows = [
+      { id: "70000000-0000-4000-8000-000000000001", created: "2027-03-01T00:30:00Z", total: 20000, flavour: "Vanilla bean", stage: "received" },
+      { id: "70000000-0000-4000-8000-000000000002", created: "2027-03-10T05:00:00Z", total: 10000, flavour: "Chocolate mud", stage: "collected" },
+      { id: "70000000-0000-4000-8000-000000000003", created: "2027-03-31T13:30:00Z", total: 50000, flavour: "Vanilla bean", stage: "received" }, // 12:30am 1 Apr in Sydney (AEDT)
+      { id: "70000000-0000-4000-8000-000000000004", created: "2027-03-12T05:00:00Z", total: 99900, flavour: "Red velvet", stage: "cancelled" },
+    ];
+    for (const r of rows) {
+      await db.query(
+        `insert into orders (id, reference, token_hash, stage, customer_name, email, phone, pickup_date, pickup_slot, config, subtotal_cents, total_cents, deposit_cents, terms_accepted_at, created_at)
+         values ($1, $2, $3, $4, 'X', 'x@example.com', '0400000000', '2027-04-20', '10:00', '{}', $5, $5, 0, now(), $6)`,
+        [r.id, `CBE-${r.id.slice(-5)}`, `hash-${r.id}`, r.stage, r.total, r.created],
+      );
+      await db.query("insert into order_items (order_id, category, name, amount_cents) values ($1, 'flavour', $2, 0), ($1, 'occasion', 'Birthday', 0)", [r.id, r.flavour]);
+    }
+    await db.query(`insert into payments (order_id, kind, amount_cents, stripe_session_id, status, created_at) values ($1, 'deposit', 10000, 'cs_snap_1', 'paid', '2027-03-01T00:30:00Z')`, [rows[0].id]);
+
+    const sql = (await db.query<{ s: Record<string, unknown> }>("select sales_summary('2027-03-01', '2027-03-31') as s")).rows[0].s;
+    const sydney = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Sydney" }).format(new Date(iso));
+    const app = summarise(
+      rows.map((r) => ({
+        stage: r.stage,
+        createdAt: r.created,
+        totalCents: r.total,
+        items: [
+          { itemId: null, category: "flavour", name: r.flavour, amountCents: 0 },
+          { itemId: null, category: "occasion", name: "Birthday", amountCents: 0 },
+        ],
+      })) as never,
+      [{ status: "paid", kind: "deposit", amountCents: 10000, createdAt: "2027-03-01T00:30:00Z" }] as never,
+      "2027-03-01",
+      "2027-03-31",
+      sydney,
+    );
+    expect(sql).toEqual({
+      orders: app.orders,
+      revenueCents: app.revenueCents,
+      depositsCents: app.depositsCents,
+      topFlavours: app.topFlavours,
+      topFinishes: app.topFinishes,
+      topOccasions: app.topOccasions,
+    });
+    expect(app).toMatchObject({ orders: 2, revenueCents: 30000, depositsCents: 10000 });
   });
 });

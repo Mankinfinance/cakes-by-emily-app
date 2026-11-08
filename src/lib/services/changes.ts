@@ -21,6 +21,7 @@ import {
   designForApprovalEmail,
   sendSafely,
 } from "./email";
+import { expireClassOffers, releaseStaleBookings, runClassMessages } from "./classes";
 import { runScheduledMessages, sendEventMessage } from "./messages";
 import { issueCredit } from "./vouchers";
 import { expireOffers, offerNext } from "./waitlist";
@@ -176,7 +177,7 @@ export async function requestDesignChange(deps: LightDeps, orderId: string, requ
 }
 
 /** Cancel unpaid orders and box orders that were abandoned at checkout, releasing what they held. */
-export async function releaseStale(deps: LightDeps): Promise<{ orders: number; boxes: number }> {
+export async function releaseStale(deps: LightDeps): Promise<{ orders: number; boxes: number; corporate: number; bookings: number }> {
   const now = nowOf(deps);
   const before = new Date(now.getTime() - RELEASE_AFTER_MINUTES * 60_000).toISOString();
   let orders = 0;
@@ -194,6 +195,7 @@ export async function releaseStale(deps: LightDeps): Promise<{ orders: number; b
     if (await deps.repo.cancelOrderOnce(o.id, record, true)) {
       orders++;
       await giveBackVoucher(deps, o);
+      await deps.repo.voidReferral(o.id);
       await offerNext(deps, o.pickupDate);
     }
   }
@@ -201,13 +203,20 @@ export async function releaseStale(deps: LightDeps): Promise<{ orders: number; b
   for (const b of await deps.repo.listStaleUnpaidBoxOrders(before)) {
     if (await deps.repo.cancelBoxOrder(b.id, true)) boxes++;
   }
-  return { orders, boxes };
+  let corporate = 0;
+  for (const c of await deps.repo.listStaleUnpaidCorporate(before)) {
+    if (await deps.repo.setCorporateStatus(c.id, "cancelled", ["awaiting_payment"])) corporate++;
+  }
+  const bookings = await releaseStaleBookings(deps);
+  return { orders, boxes, corporate, bookings };
 }
 
 /** Everything the daily cron does. Each part is safe to run more than once. */
 export async function runDaily(deps: LightDeps) {
   const released = await releaseStale(deps);
   const waitlist = await expireOffers(deps);
+  const classWaitlist = await expireClassOffers(deps);
   const messages = await runScheduledMessages(deps);
-  return { released, waitlist, messages };
+  const classMessages = await runClassMessages(deps);
+  return { released, waitlist, classWaitlist, messages, classMessages };
 }

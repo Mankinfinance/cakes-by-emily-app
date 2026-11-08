@@ -17,6 +17,7 @@ export const cakeConfigSchema = z.object({
   colour: id,
   decorations: z.array(id).max(20),
   extras: z.array(id).max(20),
+  addons: z.array(id).max(20).default([]),
   topperText: z.string().max(30).default(""),
 });
 
@@ -39,6 +40,7 @@ export const orderRequestSchema = z.object({
   acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
   remindNextYear: z.boolean().default(false),
   voucherCode: z.string().trim().max(40).default(""),
+  referralCode: z.string().trim().max(20).default(""),
   /** Set when claiming a waitlist offer. */
   waitlistToken: z.string().trim().max(60).default(""),
 });
@@ -75,6 +77,30 @@ export const settingsSchema = z
     voucherCustomMinCents: z.number().int().min(500).max(100_000),
     voucherCustomMaxCents: z.number().int().min(500).max(100_000),
     reviewUrl: z.union([z.literal(""), z.string().trim().url().max(500).refine((u) => u.startsWith("https://"), "Use an https:// link")]),
+    referralsEnabled: z.boolean(),
+    referralGiveCents: z.number().int().min(0).max(20_000),
+    referralGetCents: z.number().int().min(0).max(20_000),
+    stampsEnabled: z.boolean(),
+    stampEvery: z.number().int().min(2).max(50),
+    stampRewardName: z.string().trim().min(1).max(80),
+    groupDiscountMinSeats: z.number().int().min(2).max(20),
+    groupDiscountPercent: z.number().int().min(0).max(50),
+    classBlocksCakes: z.boolean(),
+    privatePackages: z
+      .array(
+        z.object({
+          key: z.string().regex(/^[a-z0-9-]{1,30}$/),
+          name: z.string().trim().min(1).max(60),
+          includes: z.string().trim().max(200),
+          perPersonCents: z.number().int().min(0).max(100_000),
+          depositCents: z.number().int().min(0).max(100_000),
+          minGuests: z.number().int().min(1).max(50),
+          maxGuests: z.number().int().min(1).max(50),
+          kids: z.boolean(),
+          visible: z.boolean(),
+        }),
+      )
+      .max(10),
   })
   .refine((s) => s.cancelCreditDays <= s.cancelFullRefundDays, {
     message: "The credit window must start on or before the full refund window",
@@ -96,6 +122,7 @@ export const catalogueItemPatchSchema = z.object({
   allergens: z.array(z.enum(ALLERGENS)).optional(),
   visible: z.boolean().optional(),
   sort: z.number().int().min(0).max(100000).optional(),
+  bondCents: cents.optional(),
 });
 
 export const newCatalogueItemSchema = z.object({
@@ -227,3 +254,81 @@ export const seasonalBoxSchema = z
   })
   .refine((b) => b.opensOn <= b.closesOn, { message: "Pre-orders must open before they close", path: ["closesOn"] })
   .refine((b) => b.pickupFrom <= b.pickupTo, { message: "Pickup window start must be before its end", path: ["pickupTo"] });
+
+// Phase 3 ---------------------------------------------------------------------
+
+export const corporateRequestSchema = z.object({
+  packageId: z.string().regex(/^[a-z0-9-]{1,60}$/),
+  companyName: z.string().trim().min(1, "Please enter the company name").max(120),
+  abn: z
+    .string()
+    .trim()
+    .transform((v) => v.replace(/\s/g, ""))
+    .refine((v) => v === "" || /^[0-9]{11}$/.test(v), "An ABN has 11 digits")
+    .default(""),
+  contactName: personFields.customerName,
+  email: personFields.email,
+  phone: personFields.phone,
+  notes: z.string().trim().max(1000).default(""),
+  pickupDate: isoDate,
+  pickupSlot: hhmm,
+  acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+});
+export type CorporateRequest = z.infer<typeof corporateRequestSchema>;
+
+export const reviewSchema = z.object({
+  rating: z.number().int().min(1, "Please choose a star rating").max(5),
+  text: z.string().trim().max(1500).default(""),
+  consentToPublish: z.boolean().default(false),
+});
+
+const guestSchema = z.object({
+  name: z.string().trim().min(1, "Please enter each guest's name").max(80),
+  allergies: z.string().trim().max(300).default(""),
+});
+
+export const classBookingSchema = z
+  .object({
+    sessionId: z.string().uuid(),
+    seats: z.number().int().min(1).max(6),
+    guests: z.array(guestSchema).min(1).max(6),
+    contactName: personFields.customerName,
+    email: personFields.email,
+    phone: personFields.phone,
+    adultConfirmed: z.boolean().default(false),
+    marketingOptIn: z.boolean().default(false),
+    acceptTerms: z.literal(true, { error: "Please accept the terms to continue" }),
+    waitlistToken: z.string().trim().max(60).default(""),
+  })
+  .refine((b) => b.guests.length === b.seats, { message: "Please add a name for every seat", path: ["guests"] });
+export type ClassBookingRequest = z.infer<typeof classBookingSchema>;
+
+export const classWaitlistSchema = z.object({
+  sessionId: z.string().uuid(),
+  seats: z.number().int().min(1).max(6),
+  ...personFields,
+});
+export type ClassWaitlistRequest = z.infer<typeof classWaitlistSchema>;
+
+export const privateRequestSchema = z.object({
+  packageKey: z.string().regex(/^[a-z0-9-]{1,30}$/),
+  guests: z.number().int().min(1).max(50),
+  preferredDate: isoDate,
+  preferredTime: hhmm,
+  occasion: z.string().trim().max(80).default(""),
+  notes: z.string().trim().max(1000).default(""),
+  ...personFields,
+});
+export type PrivateRequestInput = z.infer<typeof privateRequestSchema>;
+
+export const sessionSchema = z.object({
+  classTypeId: z.string().regex(/^[a-z0-9-]{1,60}$/),
+  date: isoDate,
+  startTime: hhmm,
+  seats: z.number().int().min(1).max(50),
+});
+
+export const seriesSchema = sessionSchema.extend({
+  everyDays: z.union([z.literal(7), z.literal(14), z.literal(28)]),
+  count: z.number().int().min(1).max(26),
+});

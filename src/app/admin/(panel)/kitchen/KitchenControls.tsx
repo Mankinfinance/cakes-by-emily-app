@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toggleKitchenAction } from "../actions";
 
-export function KitchenTick({ kind, id, done, label }: { kind: "cake" | "box"; id: string; done: boolean; label: string }) {
+export function KitchenTick({ kind, id, done, label }: { kind: "cake" | "box" | "corporate"; id: string; done: boolean; label: string }) {
   const router = useRouter();
   const [checked, setChecked] = useState(done);
   const [pending, start] = useTransition();

@@ -51,6 +51,7 @@ export function categoryNoun(category: Category): string {
     colour: "colour",
     decoration: "decoration",
     extra: "extra",
+    addon: "add-on",
   };
   return nouns[category];
 }
@@ -112,6 +113,7 @@ export function sanitizeConfig(
       colour: pickOne("colour", config.colour),
       decorations: pickMany("decoration", [...new Set(config.decorations)]),
       extras: pickMany("extra", [...new Set(config.extras)]),
+      addons: pickMany("addon", [...new Set(config.addons ?? [])]),
       topperText: config.topperText.trim().slice(0, 30),
     },
     removed,

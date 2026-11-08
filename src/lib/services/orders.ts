@@ -14,9 +14,11 @@ import { looksLikeCode, VOUCHER_PROBLEM_TEXT, voucherProblem } from "../domain/v
 import type { OrderRequest } from "../validation";
 import { checkUpload, IMAGE_TYPES, magicMatches, MAX_PHOTO_BYTES, MAX_VIDEO_BYTES, VIDEO_TYPES } from "../validation";
 import { calendarContext } from "./calendar";
-import { adminEmail, adminLink, boxLink, nowOf, OrderError, orderLink, type Deps, type LightDeps } from "./common";
+import { adminEmail, adminLink, boxLink, corporateLink, nowOf, OrderError, orderLink, type Deps, type LightDeps } from "./common";
 import {
   balanceReceiptEmail,
+  corporateAlertEmail,
+  corporateConfirmationEmail,
   boxAlertEmail,
   boxConfirmationEmail,
   latePaymentAlertEmail,
@@ -26,6 +28,8 @@ import {
   stageEmail,
 } from "./email";
 import { sendEventMessage } from "./messages";
+import { onClassPaid, onPrivatePaid } from "./classes";
+import { checkReferral, rewardReferral, stampCardFor } from "./referrals";
 import { sendVoucherEmails } from "./vouchers";
 import { offerFromToken } from "./waitlist";
 import { hashCode, hashToken, newReference, orderToken } from "./tokens";
@@ -65,12 +69,19 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
   const booking = checkBooking(req.pickupDate, req.pickupSlot, ctx);
   if (!booking.ok) throw new OrderError(booking.reason, 409);
 
+  // Phase 3: a referral code for a first order, and a stamp card reward if one is due.
+  const referral = req.referralCode ? await checkReferral(repo, ctx.settings, req.referralCode, req.email) : null;
+  const stamps = ctx.settings.stampsEnabled ? await stampCardFor(repo, ctx.settings, req.email) : null;
+  const stampReward = Boolean(stamps && stamps.rewardsAvailable > 0);
+
   let price;
   try {
     price = priceCake(config, visibleItems(catalogue), ctx.settings, {
       isRush: booking.status.isRush,
       peakSurchargeCents: booking.status.peak?.surchargeCents ?? 0,
       peakLabel: booking.status.peak?.label,
+      referralDiscountCents: referral ? ctx.settings.referralGiveCents : 0,
+      stampRewardName: stampReward ? ctx.settings.stampRewardName : undefined,
     });
   } catch (e) {
     if (e instanceof PricingError) throw new OrderError(e.message);
@@ -123,13 +134,20 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
     dietary: req.dietary,
     remindNextYear: req.remindNextYear && isBirthday({ config }),
     waitlistId: claim?.id ?? null,
+    referralCode: referral?.code ?? null,
+    stampReward,
   });
 
   const abandon = async (message: string, status = 409): Promise<never> => {
     await repo.cancelOrderOnce(order.id, null, true);
     await repo.returnVoucher(order.id, today);
+    await repo.voidReferral(order.id);
     throw new OrderError(message, status);
   };
+
+  if (referral && !(await repo.createReferral({ code: referral.code, referrerEmail: referral.referrerEmail, referredEmail: req.email, orderId: order.id }))) {
+    await abandon("A referral code has already been used for this email.");
+  }
 
   if (claim && !(await repo.claimWaitlist(claim.id, order.id, now.toISOString()))) {
     await abandon("Sorry, that waitlist offer has expired.", 410);
@@ -170,6 +188,7 @@ export async function createOrder(deps: Deps, req: OrderRequest, inspiration: Up
 /** The deposit is in (or a voucher covered it): confirm to the customer and tell Emily. */
 async function onDepositSettled(deps: LightDeps, order: Order) {
   await sendEventMessage(deps, order, "order_received");
+  await rewardReferral(deps, order);
   const alertTo = adminEmail();
   if (alertTo) await sendSafely(deps.mailer, newOrderAlertEmail(order, adminLink(deps.baseUrl, order.id), alertTo));
 }
@@ -223,6 +242,26 @@ export async function handlePaidSession(deps: LightDeps, eventId: string, sessio
   } else if (payment.voucherId) {
     const v = await repo.getVoucherById(payment.voucherId);
     if (v) await sendVoucherEmails(deps, v);
+  } else if (payment.corporateOrderId) {
+    const c = await repo.getCorporateOrderById(payment.corporateOrderId);
+    if (!c) return true;
+    if (c.status === "cancelled") {
+      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(c.reference, payment.amountCents, alertTo));
+      return true;
+    }
+    await sendSafely(mailer, corporateConfirmationEmail(c, corporateLink(deps.baseUrl, c.id)));
+    if (alertTo && payment.kind === "corporate_deposit") await sendSafely(mailer, corporateAlertEmail(c, alertTo));
+  } else if (payment.classBookingId) {
+    const b = await repo.getBookingById(payment.classBookingId);
+    if (!b) return true;
+    if (b.status === "cancelled") {
+      if (alertTo) await sendSafely(mailer, latePaymentAlertEmail(b.reference, payment.amountCents, alertTo));
+      return true;
+    }
+    await onClassPaid(deps, b);
+  } else if (payment.privateRequestId) {
+    const r = await repo.getPrivateRequest(payment.privateRequestId);
+    if (r) await onPrivatePaid(deps, r);
   }
   return true;
 }

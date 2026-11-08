@@ -350,7 +350,7 @@ describe("seasonal boxes", () => {
   it("puts stock back when a checkout is abandoned", async () => {
     const a = await createBoxOrder(deps, boxReq(2));
     backdateMemoryRecord("box", a.order.id, "2026-11-07T20:00:00Z");
-    expect(await releaseStale(deps)).toEqual({ orders: 0, boxes: 1 });
+    expect(await releaseStale(deps)).toMatchObject({ orders: 0, boxes: 1 });
     expect((await repo.getBox(BOX))?.sold).toBe(0);
     expect((await repo.getBoxOrderById(a.order.id))?.status).toBe("cancelled");
   });
